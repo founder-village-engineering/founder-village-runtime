@@ -1,0 +1,187 @@
+name: ${COMPOSE_PROJECT_NAME}
+x-app: &app
+  image: ${FV_APP_IMAGE:-fv-runtime:local}
+  build:
+    context: .
+    dockerfile: infra/images/app.Dockerfile
+  init: true
+  user: '65532:65532'
+  read_only: true
+  tmpfs: ['/tmp:size=32m,noexec,nosuid']
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  restart: unless-stopped
+  mem_limit: 384m
+  pids_limit: 128
+  networks: [data, broker, edge]
+  environment: &app-env
+    FV_ENV: ${FV_ENV}
+    FV_REVISION: ${FV_REVISION:-local}
+    BIND_HOST: 0.0.0.0
+    PORT: 8080
+    OIDC_ISSUER: ${OIDC_ISSUER}
+    OIDC_AUDIENCE: ${OIDC_AUDIENCE}
+    OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
+    LOCAL_JWT_SECRET: ${LOCAL_JWT_SECRET}
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: infra/images/postgres.Dockerfile
+      args: {POSTGRES_IMAGE: '${POSTGRES_IMAGE}'}
+    image: fv-postgres:${FV_ENV}
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: --data-checksums
+    ports: ['127.0.0.1:43832:5432']
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - backups:/var/lib/pgbackrest
+      - ./${FV_STATE_DIR}/postgres:/run/fv:ro
+    networks: [data, backup-egress]
+    shm_size: 128mb
+    mem_limit: 768m
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U postgres -d postgres']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  hasura:
+    image: ${HASURA_IMAGE}
+    restart: unless-stopped
+    environment:
+      HASURA_GRAPHQL_DATABASE_URL: postgresql://fv_hasura_metadata:${HASURA_METADATA_PASSWORD}@postgres:5432/fv_hasura
+      HASURA_FOUNDER_VILLAGE_DATABASE_URL: postgresql://fv_founder_village_hasura:${FOUNDER_VILLAGE_HASURA_PASSWORD}@postgres:5432/founder-village
+      HASURA_FOUNDER_FARM_DATABASE_URL: postgresql://fv_founder_farm_hasura:${FOUNDER_FARM_HASURA_PASSWORD}@postgres:5432/founder-farm
+      HASURA_FOUNDER_CAFE_DATABASE_URL: postgresql://fv_founder_cafe_hasura:${FOUNDER_CAFE_HASURA_PASSWORD}@postgres:5432/founder-cafe
+      HASURA_FOUNDER_RESIDENCES_DATABASE_URL: postgresql://fv_founder_residences_hasura:${FOUNDER_RESIDENCES_HASURA_PASSWORD}@postgres:5432/founder-residences
+      HASURA_GRAPHQL_ADMIN_SECRET: ${HASURA_ADMIN_SECRET}
+      HASURA_GRAPHQL_JWT_SECRET: ${HASURA_JWT_CONFIG}
+      HASURA_GRAPHQL_ENABLE_CONSOLE: 'false'
+      HASURA_GRAPHQL_DEV_MODE: 'false'
+      HASURA_GRAPHQL_ENABLED_LOG_TYPES: startup,http-log
+      HASURA_GRAPHQL_LOG_LEVEL: error
+      HASURA_GRAPHQL_ENABLE_TELEMETRY: 'false'
+    depends_on: {postgres: {condition: service_healthy}}
+    ports: ['127.0.0.1:43803:8080']
+    networks: [data, hasura-access]
+    mem_limit: 512m
+  rabbitmq:
+    image: fv-rabbitmq:${FV_ENV}
+    build:
+      context: .
+      dockerfile: infra/images/rabbitmq.Dockerfile
+      args: {RABBITMQ_IMAGE: '${RABBITMQ_IMAGE}'}
+    hostname: fv-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: '-rabbitmq_management load_definitions "/etc/rabbitmq/definitions.json"'
+    ports: ['127.0.0.1:43872:5672']
+    volumes:
+      - rabbitmq:/var/lib/rabbitmq
+      - ./${FV_STATE_DIR}/rabbitmq:/run/fv:ro
+    networks: [broker, broker-access]
+    mem_limit: 512m
+    healthcheck: {test: [CMD, rabbitmq-diagnostics, -q, ping], interval: 5s, timeout: 5s, retries: 30}
+  api-blue:
+    <<: *app
+    image: ${FV_API_BLUE_IMAGE:-${FV_APP_IMAGE:-fv-runtime:local}}
+    profiles: [applications]
+    command: [node, dist/services/api/main.js]
+    ports: ['127.0.0.1:43811:8080']
+    environment:
+      <<: *app-env
+      FV_REVISION: ${FV_API_BLUE_REVISION:-${FV_REVISION:-local}}
+      FOUNDER_VILLAGE_DATABASE_URL: postgresql://fv_founder_village_api:${FOUNDER_VILLAGE_API_PASSWORD}@postgres:5432/founder-village
+      FOUNDER_FARM_DATABASE_URL: postgresql://fv_founder_farm_api:${FOUNDER_FARM_API_PASSWORD}@postgres:5432/founder-farm
+      FOUNDER_CAFE_DATABASE_URL: postgresql://fv_founder_cafe_api:${FOUNDER_CAFE_API_PASSWORD}@postgres:5432/founder-cafe
+      FOUNDER_RESIDENCES_DATABASE_URL: postgresql://fv_founder_residences_api:${FOUNDER_RESIDENCES_API_PASSWORD}@postgres:5432/founder-residences
+      HASURA_URL: http://hasura:8080
+      HASURA_JWT_SECRET: ${HASURA_JWT_SECRET}
+  api-green:
+    <<: *app
+    image: ${FV_API_GREEN_IMAGE:-${FV_APP_IMAGE:-fv-runtime:local}}
+    profiles: [applications]
+    command: [node, dist/services/api/main.js]
+    ports: ['127.0.0.1:43812:8080']
+    environment:
+      <<: *app-env
+      FV_REVISION: ${FV_API_GREEN_REVISION:-${FV_REVISION:-local}}
+      FOUNDER_VILLAGE_DATABASE_URL: postgresql://fv_founder_village_api:${FOUNDER_VILLAGE_API_PASSWORD}@postgres:5432/founder-village
+      FOUNDER_FARM_DATABASE_URL: postgresql://fv_founder_farm_api:${FOUNDER_FARM_API_PASSWORD}@postgres:5432/founder-farm
+      FOUNDER_CAFE_DATABASE_URL: postgresql://fv_founder_cafe_api:${FOUNDER_CAFE_API_PASSWORD}@postgres:5432/founder-cafe
+      FOUNDER_RESIDENCES_DATABASE_URL: postgresql://fv_founder_residences_api:${FOUNDER_RESIDENCES_API_PASSWORD}@postgres:5432/founder-residences
+      HASURA_URL: http://hasura:8080
+      HASURA_JWT_SECRET: ${HASURA_JWT_SECRET}
+  workers:
+    <<: *app
+    stop_grace_period: 40s
+    profiles: [applications]
+    command: [node, dist/services/workers/main.js]
+    networks: [data, broker]
+    environment:
+      FV_ENV: ${FV_ENV}
+      BIND_HOST: 0.0.0.0
+      PORT: 8080
+      WORKER_FOUNDER_VILLAGE_DATABASE_URL: postgresql://fv_founder_village_worker:${FOUNDER_VILLAGE_WORKER_PASSWORD}@postgres:5432/founder-village
+      WORKER_FOUNDER_FARM_DATABASE_URL: postgresql://fv_founder_farm_worker:${FOUNDER_FARM_WORKER_PASSWORD}@postgres:5432/founder-farm
+      WORKER_FOUNDER_CAFE_DATABASE_URL: postgresql://fv_founder_cafe_worker:${FOUNDER_CAFE_WORKER_PASSWORD}@postgres:5432/founder-cafe
+      WORKER_FOUNDER_RESIDENCES_DATABASE_URL: postgresql://fv_founder_residences_worker:${FOUNDER_RESIDENCES_WORKER_PASSWORD}@postgres:5432/founder-residences
+      AMQP_URL: amqp://fv:${AMQP_PASSWORD}@rabbitmq:5672/fv
+  admin:
+    <<: *app
+    image: ${FV_ADMIN_IMAGE:-${FV_APP_IMAGE:-fv-runtime:local}}
+    profiles: [applications]
+    command: [node, dist/services/admin-api/main.js]
+    networks: [data, edge]
+    environment:
+      <<: *app-env
+      CONTROL_DATABASE_URL: postgresql://fv_admin:${ADMIN_PASSWORD}@postgres:5432/fv_control
+      ADMIN_ORIGIN: ${ADMIN_ORIGIN}
+      CF_BINARY: /app/node_modules/cf/bin/cf
+      CF_SHA256: ${CF_SHA256:-}
+      CF_WORK_DIR: /tmp/cf
+      CF_READ_TOKEN: ${CF_READ_TOKEN:-}
+      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:-}
+      CF_ZONE_ID: ${CF_ZONE_ID:-}
+      CF_ZONE_NAME: ${CF_ZONE_NAME:-}
+      CF_MANAGED_NAMES: ${CF_MANAGED_NAMES:-}
+      ACCESS_TEAM: ${ACCESS_TEAM:-}
+      ACCESS_AUD: ${ACCESS_AUD:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_AUTHORIZATION_ENDPOINT: ${OIDC_AUTHORIZATION_ENDPOINT:-}
+      OIDC_TOKEN_ENDPOINT: ${OIDC_TOKEN_ENDPOINT:-}
+      OIDC_MFA_ACR: ${OIDC_MFA_ACR:-urn:mfa}
+  caddy:
+    image: ${CADDY_IMAGE}
+    profiles: [applications]
+    restart: unless-stopped
+    ports: ['127.0.0.1:43880:8080']
+    volumes: ['./${FV_STATE_DIR}/caddy:/etc/caddy:ro']
+    networks: [edge]
+    mem_limit: 128m
+  cloudflared:
+    image: ${CLOUDFLARED_IMAGE}
+    profiles: [ingress]
+    command: [tunnel, --no-autoupdate, run, --token-file, /run/fv/token]
+    user: '0:0'
+    cap_drop: [ALL]
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    volumes: ['./${FV_STATE_DIR}/tunnel:/run/fv:ro']
+    networks: [edge]
+    restart: unless-stopped
+    mem_limit: 128m
+
+networks:
+  hasura-access: {}
+  broker-access: {}
+  backup-egress: {}
+  data: {internal: true}
+  broker: {internal: true}
+  edge: {}
+volumes:
+  postgres: {}
+  rabbitmq: {}
+  backups: {}

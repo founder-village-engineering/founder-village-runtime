@@ -1,0 +1,9 @@
+[Unit]
+Description=Founder Village encrypted database backup
+After=fv-runtime.service
+[Service]
+Type=oneshot
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/target/release/fv --config @CONFIG@ backup capture --kind full
+UMask=0077
+TimeoutStartSec=7200

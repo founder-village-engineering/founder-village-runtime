@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+if [ -x "$ROOT/target/release/fv" ]; then exec "$ROOT/target/release/fv" --root "$ROOT" "$@"; fi
+exec cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -p fv-cli -- --root "$ROOT" "$@"

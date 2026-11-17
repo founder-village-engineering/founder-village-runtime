@@ -1,0 +1,60 @@
+name: Build signed release
+on:
+  push: { tags: ["v*.*.*"] }
+permissions: { contents: read, packages: write, id-token: write }
+concurrency: { group: "release-${{ github.ref }}", cancel-in-progress: false }
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+  build:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: { node-version: 24.22.0, cache: npm }
+      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5
+      - run: npm ci && npm run check && npm run security:scan
+      - run: rustup toolchain install 1.90.0 --profile minimal && cargo build --release --locked -p fv-cli
+      - name: Build immutable candidate
+        run: docker build --build-arg FV_REVISION="${{ github.sha }}" -f infra/images/app.Dockerfile -t "ghcr.io/${{ github.repository }}:${{ github.sha }}" .
+      - uses: aquasecurity/trivy-action@38b337fff0a2f984d5be173c99e3f633438167ec
+        with:
+          image-ref: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          format: cyclonedx
+          output: sbom.cdx.json
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+      - name: Publish immutable image
+        env: { GHCR_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+          docker push "ghcr.io/${{ github.repository }}:${{ github.sha }}"
+          IMAGE=$(docker inspect --format='{{index .RepoDigests 0}}' "ghcr.io/${{ github.repository }}:${{ github.sha }}")
+          cosign sign --yes "$IMAGE"
+          printf '%s\n' "$IMAGE" > image-digest.txt
+          sha256sum target/release/fv > fv.sha256
+          cosign sign-blob --yes --bundle fv.sigstore.json target/release/fv
+      # Artifacts are available in the signed image/registry. Operator promotion is separate.
+
+      - name: Sign source archive
+        run: |
+          git archive --format=tar --output=source.tar HEAD
+          cosign sign-blob --yes --bundle source.sigstore.json source.tar
+          node scripts/release-manifest.ts
+          cosign sign-blob --yes --bundle source-manifest.sigstore.json source-manifest.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fv-linux-amd64-${{ github.sha }}
+          path: |
+            target/release/fv
+            fv.sha256
+            fv.sigstore.json
+            source.tar
+            source.sigstore.json
+            image-digest.txt
+            sbom.cdx.json
+            source-manifest.json
+            source-manifest.sigstore.json

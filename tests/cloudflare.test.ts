@@ -1,0 +1,66 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  Cloudflare,
+  fingerprint,
+  type Existing,
+} from "../packages/operations/cloudflare.ts";
+process.env.CF_MANAGED_NAMES = "canary.example.com";
+process.env.CF_ZONE_NAME = "example.com";
+process.env.CF_ZONE_ID = "00000000000000000000000000000000";
+class Fixture extends Cloudflare {
+  state: Existing | null = {
+    id: "synthetic",
+    name: "canary.example.com",
+    type: "A",
+    content: "192.0.2.1",
+    proxied: false,
+    ttl: 300,
+  };
+  skipDelete = false;
+  calls: string[][] = [];
+  override async call(args: string[]): Promise<unknown> {
+    this.calls.push(args);
+    if (args[2] === "list") return this.state ? [this.state] : [];
+    if (args[2] === "delete") {
+      if (!this.skipDelete) this.state = null;
+      return { success: true };
+    }
+    if (args[2] === "update" || args[2] === "create") {
+      this.state = { id: "synthetic", ...JSON.parse(args.at(-1)!) } as Existing;
+      return this.state;
+    }
+    throw new Error("unexpected fixture command");
+  }
+}
+test("DNS fingerprint survives JSONB key ordering and rejects drift", async () => {
+  const cf = new Fixture(true);
+  const before = cf.state!;
+  const reordered = Object.fromEntries(
+    Object.entries(before).reverse(),
+  ) as Existing;
+  assert.equal(fingerprint(before), fingerprint(reordered));
+  await cf.apply(before.name, reordered, {
+    name: before.name,
+    type: "A",
+    content: "192.0.2.2",
+    ttl: 300,
+    proxied: false,
+  });
+  assert.equal(cf.state?.content, "192.0.2.2");
+  await assert.rejects(() => cf.apply(before.name, before, null), /drift/);
+});
+test("a successful CLI exit without deletion fails its postcondition", async () => {
+  const cf = new Fixture(true);
+  cf.skipDelete = true;
+  await assert.rejects(
+    () => cf.apply("canary.example.com", cf.state, null),
+    /postcondition/,
+  );
+  assert(cf.calls.some((a) => a.includes("--force")));
+});
+test("unmanaged domains never reach the CLI", async () => {
+  const cf = new Fixture(true);
+  await assert.rejects(() => cf.inventory("unrelated.example.com"));
+  assert.equal(cf.calls.length, 0);
+});

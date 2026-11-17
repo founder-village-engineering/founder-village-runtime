@@ -1,0 +1,5 @@
+{
+  "rabbitmq": {
+    "4.2": "rabbitmq:4.2.9-management@sha256:7fa20d0d23d63ed90499bbf62e24af48ec4ae5eb22d173f3db96e3f85b26884a"
+  }
+}

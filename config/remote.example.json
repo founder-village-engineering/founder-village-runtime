@@ -1,0 +1,44 @@
+{
+  "environment": "local",
+  "project": "fv-local",
+  "api_domain": "api.fv.test",
+  "admin_domain": "admin.fv.test",
+  "ssh_cidrs": ["127.0.0.1/32"],
+  "wireguard_cidr": "10.89.0.0/24",
+  "wireguard_port": 51827,
+  "provider": {
+    "name": "hetzner",
+    "location": "ash",
+    "server_type": "cpx22",
+    "image": "ubuntu-24.04",
+    "ssh_key_ids": []
+  },
+  "cloudflare": {
+    "account_id": "",
+    "zone_id": "",
+    "zone_name": "example.com",
+    "managed_names": ["canary.example.com"],
+    "access_team": "",
+    "access_aud": "",
+    "cf_binary": "/usr/local/bin/cf",
+    "cf_sha256": ""
+  },
+  "backup": {
+    "retention_days": 30,
+    "rpo_seconds": 300,
+    "rto_seconds": 14400,
+    "s3_endpoint": "",
+    "bucket": "",
+    "region": "us-east-1",
+    "immutable_copy_confirmed": false
+  },
+  "auth": {
+    "issuer": "https://local.fv.test",
+    "audience": "fv-local",
+    "jwks_url": "",
+    "client_id": "",
+    "authorization_endpoint": "",
+    "token_endpoint": "",
+    "root_actors": []
+  }
+}

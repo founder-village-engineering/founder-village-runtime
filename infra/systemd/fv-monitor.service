@@ -1,0 +1,33 @@
+[Unit]
+Description=Founder Village health and capacity monitor
+After=fv-runtime.service
+[Service]
+User=fv-monitor
+WorkingDirectory=@ROOT@
+EnvironmentFile=/etc/fv/monitor.env
+ExecStart=/usr/local/bin/node @ROOT@/dist/services/monitor/main.js
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+LockPersonality=yes
+TasksMax=128
+LimitCORE=0
+UMask=0077
+[Install]
+WantedBy=multi-user.target

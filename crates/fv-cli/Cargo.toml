@@ -1,0 +1,16 @@
+[package]
+name = "fv-cli"
+version.workspace = true
+edition.workspace = true
+[[bin]]
+name = "fv"
+path = "src/main.rs"
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+fv-config = { path = "../fv-config" }
+fv-provider = { path = "../fv-provider" }
+fv-host = { path = "../fv-host" }
+fv-ops = { path = "../fv-ops" }
+clap = { version = "4", features = ["derive"] }
+reqwest.workspace = true

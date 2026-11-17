@@ -1,0 +1,34 @@
+[Unit]
+Description=Founder Village unprivileged domain and audit worker
+After=fv-runtime.service
+[Service]
+User=fv-domain
+WorkingDirectory=@ROOT@
+EnvironmentFile=/etc/fv/domain.env
+ExecStart=/usr/local/bin/node @ROOT@/dist/services/domain-worker/main.js
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/fv-domain
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+LockPersonality=yes
+TasksMax=128
+LimitCORE=0
+UMask=0077
+[Install]
+WantedBy=multi-user.target

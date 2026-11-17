@@ -1,0 +1,202 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-16T20:44:17.097086+00:00",
+  "environment": "local",
+  "scope": "Synthetic local engineering verification; no production or provider activation.",
+  "sourceFingerprint": {
+    "algorithm": "sha256",
+    "value": "663359bcdbd72d00aefb94e6009d86fe1397c2e4e68c35d44b88dd7e571c5497",
+    "fileCount": 126,
+    "selection": "git ls-files --cached --others --exclude-standard; exclude Markdown and docs/",
+    "encoding": "Sorted relative path, NUL, lowercase SHA256 of file bytes, newline; aggregate SHA256."
+  },
+  "applications": [
+    {
+      "id": "founder-village",
+      "database": "founder-village",
+      "hasuraSource": "founder-village",
+      "owner": "Founder Village"
+    },
+    {
+      "id": "founder-farm",
+      "database": "founder-farm",
+      "hasuraSource": "founder-farm",
+      "owner": "Founder Farm"
+    },
+    {
+      "id": "founder-cafe",
+      "database": "founder-cafe",
+      "hasuraSource": "founder-cafe",
+      "owner": "Founder Cafe"
+    },
+    {
+      "id": "founder-residences",
+      "database": "founder-residences",
+      "hasuraSource": "founder-residences",
+      "owner": "Founder Residences"
+    }
+  ],
+  "checks": {
+    "typescript": {
+      "command": "npm run check",
+      "passed": true,
+      "unitTests": 8,
+      "includes": [
+        "backend typecheck",
+        "frontend typecheck",
+        "security/unit tests",
+        "production TypeScript compilation",
+        "Vite console build"
+      ]
+    },
+    "integration": {
+      "command": "npm run test:integration",
+      "passed": true,
+      "recordedAt": "2026-11-16T20:37:21.870Z",
+      "checks": [
+        "migrations repeat without drift",
+        "authenticated persistence and idempotency conflict",
+        "cross-tenant API and database RLS denial",
+        "application database login cannot CONNECT to another application",
+        "four real application databases, application membership denial and isolated writes",
+        "unroutable publication rolls back its outbox state",
+        "real broker delivery, duplicate effect suppression and provenance denial",
+        "vector query and scoped real Hasura relay",
+        "Hasura source role cannot query another application source",
+        "session auth, CSRF denial, fixed operation catalog and durable enqueue",
+        "operation assertion tamper denial and one-time authorization consumption",
+        "delegated dashboard hides cluster inventory; grant escalation, cluster controls and cross-actor cancellation denied",
+        "audit update and deletion denied",
+        "administrator revocation checked per request"
+      ]
+    },
+    "browser": {
+      "command": "npm run test:browser",
+      "passed": true,
+      "tests": 2,
+      "projects": [
+        "desktop",
+        "mobile"
+      ],
+      "privateScreenshots": [
+        ".state/qa/admin-desktop.png",
+        ".state/qa/admin-mobile.png"
+      ]
+    },
+    "rust": {
+      "passed": true,
+      "unitTests": 2,
+      "commands": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --locked --workspace --all-targets -- -D warnings",
+        "cargo test --locked --workspace"
+      ]
+    },
+    "configuration": {
+      "command": "bin/fv validate",
+      "passed": true
+    },
+    "sourcePolicy": {
+      "passed": true,
+      "authoredJsOrMjsFiles": 0,
+      "scan": "npm run security:scan"
+    },
+    "formatAndAutomation": {
+      "passed": true,
+      "checks": [
+        "Prettier",
+        "ShellCheck",
+        "Actionlint"
+      ]
+    },
+    "dependencyAudit": {
+      "nodeProductionKnownVulnerabilities": 0,
+      "rustKnownVulnerabilities": 0,
+      "rustAdvisoryDatabaseUpdatedAt": "2026-11-15T10:59:21+01:00"
+    },
+    "applicationImage": {
+      "passed": true,
+      "localImage": "fv-runtime:local",
+      "digest": "sha256:8b0d0f5b312d9b88fa08e9a0362a871fe14c6a0f3953c8500ab15b74e7e9ac24",
+      "platform": "linux/arm64",
+      "runtime": "Pinned distroless Debian 13 with Node 24.22.0; no shell/npm",
+      "scanner": "Trivy 0.76.2",
+      "scanCreatedAt": "2026-11-16T20:41:57.014412096Z",
+      "highFindings": 0,
+      "criticalFindings": 0,
+      "otherSeverities": "Not assessed by this severity-filtered receipt.",
+      "compiledSmoke": [
+        "api-blue healthy",
+        "api-green healthy",
+        "admin healthy",
+        "workers healthy",
+        "Caddy API readiness route",
+        "Caddy admin readiness route",
+        "Cloudflare CLI --help without provider credentials"
+      ]
+    },
+    "recovery": {
+      "passed": true,
+      "receipt": {
+        "checks": [
+          "named-point-in-time-recovery",
+          "postgres-start",
+          "vector-extension",
+          "app-migrations",
+          "control-migrations",
+          "data-queries"
+        ],
+        "clean_host": false,
+        "environment": "local",
+        "isolated": true,
+        "pitr_lsn": "0/1C000E80",
+        "seconds": 3
+      },
+      "boundary": "Existing local backup repository to a new isolated container; not a clean VM or offsite recovery."
+    },
+    "wireguardProfile": {
+      "passed": true,
+      "checks": [
+        "outside-network address denied",
+        "private key preserved on retry",
+        "0600 profile file",
+        "management gateway /32 route",
+        "synthetic peer revoked"
+      ],
+      "interfaceActivated": false
+    },
+    "broker": {
+      "passed": true,
+      "version": "4.3.7",
+      "upgradePath": [
+        "4.1",
+        "4.2.9",
+        "4.3.7"
+      ],
+      "dataVolumePreserved": true
+    }
+  },
+  "notExecuted": [
+    "Hetzner allocation and fresh Linux host convergence",
+    "Real Cloudflare DNS/Tunnel/Access requests",
+    "Real OIDC/MFA sign-in and operation step-up",
+    "Hosted CI, AMD64 image scan, signed registry publication",
+    "Production blue/green cutover and rollback",
+    "Physical WireGuard handshake and interface revocation",
+    "S3 signed file transfer, immutable offsite backup copy and retention enforcement",
+    "External alert delivery and independent audit archive",
+    "Clean-VM disaster recovery and production RPO/RTO",
+    "Vulnerability scans of stateful/proxy/tunnel images"
+  ],
+  "publication": {
+    "committed": false,
+    "pushed": false,
+    "deployedToProvider": false
+  },
+  "privateEvidenceDirectories": [
+    ".state/evidence/",
+    ".state/local/",
+    ".state/qa/",
+    ".state/trivy-report/"
+  ]
+}

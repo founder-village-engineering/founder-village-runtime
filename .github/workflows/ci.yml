@@ -1,0 +1,44 @@
+name: Verify runtime
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+  workflow_dispatch: {}
+  workflow_call: {}
+permissions: { contents: read }
+concurrency:
+  group: "ci-${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: { node-version: 24.22.0, cache: npm }
+      - run: rustup toolchain install 1.90.0 --profile minimal --component clippy,rustfmt
+      - run: npm ci
+      - run: npm run format:check
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
+      - run: rustup toolchain install 1.97.0 --profile minimal && cargo +1.97.0 install cargo-audit --version 0.23.0 --locked
+      - run: cargo audit
+      - run: npm run check
+      - run: npm run security:scan
+      - run: npm audit --omit=dev --audit-level=high
+      - run: cargo build --locked -p fv-cli
+      - run: ./target/debug/fv init && ./target/debug/fv up
+      - run: npm run test:integration
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run test:browser
+      - name: Verify compiled application containers
+        run: |
+          docker build -f infra/images/app.Dockerfile -t fv-runtime:local .
+          docker compose --project-directory . --env-file .state/local.env -f infra/compose/compose.yml -f .state/local/applications.compose.json --profile applications up -d --no-build --wait --wait-timeout 90 api-blue api-green admin workers caddy
+          curl --fail --silent --show-error -H 'Host: api.fv.test' http://127.0.0.1:43880/health/ready
+          curl --fail --silent --show-error -H 'Host: admin.fv.test' http://127.0.0.1:43880/health/ready
+      - run: ./target/debug/fv backup capture && ./target/debug/fv backup restore-drill
+      - if: always()
+        run: ./target/debug/fv down

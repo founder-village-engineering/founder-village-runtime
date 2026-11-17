@@ -1,0 +1,14 @@
+{
+  "table": { "schema": "app", "name": "records" },
+  "select_permissions": [
+    {
+      "role": "__ROLE__",
+      "permission": {
+        "columns": ["id", "content", "result", "created_at", "embedding_model"],
+        "filter": { "tenant_id": { "_eq": "X-Hasura-Tenant-Id" } },
+        "limit": 100,
+        "allow_aggregations": false
+      }
+    }
+  ]
+}

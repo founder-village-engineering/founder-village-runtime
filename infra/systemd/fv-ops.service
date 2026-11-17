@@ -1,0 +1,15 @@
+[Unit]
+Description=Founder Village constrained host operations
+After=fv-runtime.service
+Requires=fv-runtime.service
+[Service]
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/target/release/fv --config @CONFIG@ ops
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=yes
+ProtectHome=true
+PrivateTmp=true
+[Install]
+WantedBy=multi-user.target

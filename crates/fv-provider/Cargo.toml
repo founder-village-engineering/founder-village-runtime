@@ -1,0 +1,9 @@
+[package]
+name = "fv-provider"
+version.workspace = true
+edition.workspace = true
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+fv-config = { path = "../fv-config" }

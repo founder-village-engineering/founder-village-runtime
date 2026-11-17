@@ -1,0 +1,15 @@
+[Unit]
+Description=Founder Village private data runtime
+Requires=docker.service
+After=docker.service network-online.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=@ROOT@
+ExecStartPre=@ROOT@/infra/templates/firewall.sh
+ExecStart=@ROOT@/target/release/fv --config @CONFIG@ up
+ExecStop=@ROOT@/target/release/fv --config @CONFIG@ down
+TimeoutStartSec=1200
+UMask=0077
+[Install]
+WantedBy=multi-user.target

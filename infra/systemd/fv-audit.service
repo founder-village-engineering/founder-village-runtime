@@ -1,0 +1,9 @@
+[Unit]
+Description=Founder Village independent audit checkpoint
+[Service]
+User=fv-domain
+WorkingDirectory=@ROOT@
+EnvironmentFile=/etc/fv/domain.env
+ExecStart=/usr/local/bin/node @ROOT@/dist/scripts/archive-audit.js
+UMask=0077
+NoNewPrivileges=yes

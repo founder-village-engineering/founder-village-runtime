@@ -1,0 +1,221 @@
+{
+  "version": 3,
+  "sources": [
+    {
+      "name": "founder-village",
+      "kind": "postgres",
+      "customization": {
+        "root_fields": {
+          "namespace": "founder_village"
+        },
+        "type_names": {
+          "prefix": "founder_village_"
+        }
+      },
+      "tables": [
+        {
+          "table": {
+            "schema": "app",
+            "name": "records"
+          },
+          "select_permissions": [
+            {
+              "role": "user_founder_village",
+              "permission": {
+                "columns": [
+                  "id",
+                  "content",
+                  "result",
+                  "created_at",
+                  "embedding_model"
+                ],
+                "filter": {
+                  "tenant_id": {
+                    "_eq": "X-Hasura-Tenant-Id"
+                  }
+                },
+                "limit": 100,
+                "allow_aggregations": false
+              }
+            }
+          ]
+        }
+      ],
+      "configuration": {
+        "connection_info": {
+          "database_url": {
+            "from_env": "HASURA_FOUNDER_VILLAGE_DATABASE_URL"
+          },
+          "pool_settings": {
+            "max_connections": 5,
+            "idle_timeout": 60
+          },
+          "isolation_level": "read-committed",
+          "use_prepared_statements": true
+        }
+      }
+    },
+    {
+      "name": "founder-farm",
+      "kind": "postgres",
+      "customization": {
+        "root_fields": {
+          "namespace": "founder_farm"
+        },
+        "type_names": {
+          "prefix": "founder_farm_"
+        }
+      },
+      "tables": [
+        {
+          "table": {
+            "schema": "app",
+            "name": "records"
+          },
+          "select_permissions": [
+            {
+              "role": "user_founder_farm",
+              "permission": {
+                "columns": [
+                  "id",
+                  "content",
+                  "result",
+                  "created_at",
+                  "embedding_model"
+                ],
+                "filter": {
+                  "tenant_id": {
+                    "_eq": "X-Hasura-Tenant-Id"
+                  }
+                },
+                "limit": 100,
+                "allow_aggregations": false
+              }
+            }
+          ]
+        }
+      ],
+      "configuration": {
+        "connection_info": {
+          "database_url": {
+            "from_env": "HASURA_FOUNDER_FARM_DATABASE_URL"
+          },
+          "pool_settings": {
+            "max_connections": 5,
+            "idle_timeout": 60
+          },
+          "isolation_level": "read-committed",
+          "use_prepared_statements": true
+        }
+      }
+    },
+    {
+      "name": "founder-cafe",
+      "kind": "postgres",
+      "customization": {
+        "root_fields": {
+          "namespace": "founder_cafe"
+        },
+        "type_names": {
+          "prefix": "founder_cafe_"
+        }
+      },
+      "tables": [
+        {
+          "table": {
+            "schema": "app",
+            "name": "records"
+          },
+          "select_permissions": [
+            {
+              "role": "user_founder_cafe",
+              "permission": {
+                "columns": [
+                  "id",
+                  "content",
+                  "result",
+                  "created_at",
+                  "embedding_model"
+                ],
+                "filter": {
+                  "tenant_id": {
+                    "_eq": "X-Hasura-Tenant-Id"
+                  }
+                },
+                "limit": 100,
+                "allow_aggregations": false
+              }
+            }
+          ]
+        }
+      ],
+      "configuration": {
+        "connection_info": {
+          "database_url": {
+            "from_env": "HASURA_FOUNDER_CAFE_DATABASE_URL"
+          },
+          "pool_settings": {
+            "max_connections": 5,
+            "idle_timeout": 60
+          },
+          "isolation_level": "read-committed",
+          "use_prepared_statements": true
+        }
+      }
+    },
+    {
+      "name": "founder-residences",
+      "kind": "postgres",
+      "customization": {
+        "root_fields": {
+          "namespace": "founder_residences"
+        },
+        "type_names": {
+          "prefix": "founder_residences_"
+        }
+      },
+      "tables": [
+        {
+          "table": {
+            "schema": "app",
+            "name": "records"
+          },
+          "select_permissions": [
+            {
+              "role": "user_founder_residences",
+              "permission": {
+                "columns": [
+                  "id",
+                  "content",
+                  "result",
+                  "created_at",
+                  "embedding_model"
+                ],
+                "filter": {
+                  "tenant_id": {
+                    "_eq": "X-Hasura-Tenant-Id"
+                  }
+                },
+                "limit": 100,
+                "allow_aggregations": false
+              }
+            }
+          ]
+        }
+      ],
+      "configuration": {
+        "connection_info": {
+          "database_url": {
+            "from_env": "HASURA_FOUNDER_RESIDENCES_DATABASE_URL"
+          },
+          "pool_settings": {
+            "max_connections": 5,
+            "idle_timeout": 60
+          },
+          "isolation_level": "read-committed",
+          "use_prepared_statements": true
+        }
+      }
+    }
+  ]
+}

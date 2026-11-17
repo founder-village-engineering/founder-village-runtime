@@ -1,0 +1,8 @@
+[Unit]
+Description=Reconcile WireGuard peers and expiry
+ConditionPathExistsGlob=@ROOT@/.state/*/wg-fv.conf
+[Service]
+Type=oneshot
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/target/release/fv --config @CONFIG@ wireguard apply
+UMask=0077

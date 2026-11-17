@@ -1,0 +1,9 @@
+[Unit]
+Description=Founder Village isolated recovery drill
+After=fv-runtime.service
+[Service]
+Type=oneshot
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/target/release/fv --config @CONFIG@ backup restore-drill
+UMask=0077
+TimeoutStartSec=14400

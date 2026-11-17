@@ -1,0 +1,26 @@
+[
+  {
+    "id": "founder-village",
+    "database": "founder-village",
+    "hasuraSource": "founder-village",
+    "owner": "Founder Village"
+  },
+  {
+    "id": "founder-farm",
+    "database": "founder-farm",
+    "hasuraSource": "founder-farm",
+    "owner": "Founder Farm"
+  },
+  {
+    "id": "founder-cafe",
+    "database": "founder-cafe",
+    "hasuraSource": "founder-cafe",
+    "owner": "Founder Cafe"
+  },
+  {
+    "id": "founder-residences",
+    "database": "founder-residences",
+    "hasuraSource": "founder-residences",
+    "owner": "Founder Residences"
+  }
+]

@@ -1,0 +1,60 @@
+{
+  "name": "founder-village-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "workspaces": [
+    "services/admin-web"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && npm run build -w services/admin-web",
+    "typecheck": "tsc --noEmit && npm run typecheck -w services/admin-web",
+    "test": "tsx --test tests/*.test.ts",
+    "test:integration": "node --env-file=.state/local.env --import tsx tests/integration.ts",
+    "test:browser": "playwright test",
+    "check": "npm run typecheck && npm test && npm run build",
+    "api": "tsx services/api/main.ts",
+    "admin": "tsx services/admin-api/main.ts",
+    "workers": "tsx services/workers/main.ts",
+    "migrate": "tsx packages/database/migrate.ts",
+    "hasura": "tsx scripts/hasura.ts",
+    "local:seed": "tsx scripts/seed.ts",
+    "security:scan": "node scripts/security-scan.ts",
+    "release:verify": "node scripts/release-verify.ts",
+    "namespace:add": "node --import tsx scripts/onboard.ts",
+    "hasura:generate": "node --import tsx scripts/generate-hasura.ts",
+    "format:check": "prettier --check \"packages/**/*.ts\" \"services/**/*.{ts,tsx,css,html,json}\" \"scripts/**/*.ts\" \"tests/**/*.ts\" \"*.json\" \"config/*.json\" \"hasura/**/*.json\" \"policies/*.json\" \".github/**/*.yml\" playwright.config.ts",
+    "format": "prettier --write \"packages/**/*.ts\" \"services/**/*.{ts,tsx,css,html,json}\" \"scripts/**/*.ts\" \"tests/**/*.ts\" \"*.json\" \"config/*.json\" \"hasura/**/*.json\" \"policies/*.json\" \".github/**/*.yml\" playwright.config.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1169.0",
+    "@aws-sdk/s3-request-presigner": "3.1169.0",
+    "@fastify/cookie": "11.1.5",
+    "@fastify/helmet": "13.2.0",
+    "@fastify/rate-limit": "11.2.2",
+    "@fastify/static": "10.1.11",
+    "@opentelemetry/api": "1.10.0",
+    "@opentelemetry/exporter-trace-otlp-http": "0.301.2",
+    "@opentelemetry/resources": "3.1.1",
+    "@opentelemetry/sdk-trace": "3.1.1",
+    "amqplib": "2.4.0",
+    "cf": "1.0.0-rc.0",
+    "fastify": "5.12.8",
+    "jose": "6.2.17",
+    "pg": "8.23.1",
+    "prom-client": "15.1.3",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "@types/amqplib": "0.10.8",
+    "@types/node": "26.6.6",
+    "@types/pg": "8.23.1",
+    "prettier": "3.10.1",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}

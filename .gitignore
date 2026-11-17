@@ -1,0 +1,15 @@
+node_modules/
+dist/
+target/
+.state/
+secrets/
+.env
+.env.*
+!.env.example
+config/*.private.json
+*.tfstate*
+playwright-report/
+test-results/
+.DS_Store
+.cloudflare/
+.cache/
