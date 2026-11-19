@@ -1,5 +1,11 @@
 # End-to-end hardening review
 
+> **Public-repository safety:** This repository is public. Be 100% careful never to commit,
+> paste, log, or otherwise expose secrets, API keys, access tokens, passwords, private keys,
+> credentials, unredacted environment values, production data, or other non-public information.
+> Use placeholders and approved secret stores, inspect staged changes before every commit, and
+> immediately rotate anything that may have been exposed.
+
 Review date: 2026-11-17. Scope: application API, administrator console, PostgreSQL/Hasura boundaries, broker workers, privileged operations, host execution, configuration, deployment and recovery. Existing unrelated staged and unstaged work is preserved. No production deployment or provider mutation is part of this review.
 
 ## Administrator red/blue follow-up

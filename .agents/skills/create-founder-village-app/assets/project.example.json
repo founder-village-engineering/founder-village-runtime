@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "slug": "founder-village-example",
+  "title": "Founder Village Example",
+  "owner": "Founder Village Example",
+  "description": "A short description of the resident outcome this app owns.",
+  "application": "founder-village-example",
+  "pagesProject": "founder-village-example",
+  "productionOrigin": "https://founder-village-example.pages.dev",
+  "localOrigin": "https://example.fv",
+  "localPort": 43911,
+  "contractSource": "packages/frontend-contracts/founder-village-example"
+}

@@ -1,5 +1,11 @@
 # Local Founder Village domains
 
+> **Public-repository safety:** This repository is public. Be 100% careful never to commit,
+> paste, log, or otherwise expose secrets, API keys, access tokens, passwords, private keys,
+> credentials, unredacted environment values, production data, or other non-public information.
+> Use placeholders and approved secret stores, inspect staged changes before every commit, and
+> immediately rotate anything that may have been exposed.
+
 `.fv` is a workstation-local convention. The runtime does not register it publicly or request public certificates. `config/local-domains.json` is the route registry:
 
 | URL | Loopback upstream |

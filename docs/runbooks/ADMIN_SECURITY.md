@@ -1,5 +1,11 @@
 # Administrator security exercises
 
+> **Public-repository safety:** This repository is public. Be 100% careful never to commit,
+> paste, log, or otherwise expose secrets, API keys, access tokens, passwords, private keys,
+> credentials, unredacted environment values, production data, or other non-public information.
+> Use placeholders and approved secret stores, inspect staged changes before every commit, and
+> immediately rotate anything that may have been exposed.
+
 The local admin panel requires a credential issued by the trusted host CLI:
 
 ```sh
@@ -14,7 +20,7 @@ CLI code issuance uses the existing admin session-issuer database role. The back
 
 ## Private Hasura inspection
 
-The Hasura page embeds `/hasura/console/data/manage/source/<source>` inside `admin.fv`. The exact registered source names remain `founder-village`, `founder-farm`, `founder-cafe` and `founder-residences`. Access requires a configured root actor, `admins.manage`, and current grants for all applications. A delegated administrator cannot obtain cluster-wide access by changing the selected application, spoofing Hasura headers or calling a console asset directly.
+The Hasura page embeds `/hasura/console/data/manage/source/<source>` inside `admin.fv`. The exact registered source names are `founder-village`, `founder-farm`, `founder-cafe`, `founder-residences`, and `founders`. Access requires a configured root actor, `admins.manage`, and current grants for all applications. A delegated administrator cannot obtain cluster-wide access by changing the selected application, spoofing Hasura headers or calling a console asset directly.
 
 The proxy constructs its own upstream headers. It discards browser authorization, cookies, role and secret headers and adds the private Hasura credential on the server. The browser bridge supplies CSRF headers and a public transport marker required by the vendor console; that marker grants no access. Each API or asset request authenticates again. HTML, assets, responses and errors use `Cache-Control: no-store` and `Pragma: no-cache`.
 
@@ -50,7 +56,7 @@ Results are written without credentials or query results to `.state/evidence/adm
 | Delegated administrator with all application grants | 403; root identity is independently required |
 | Expired or revoked session loading a console asset | 401 on the next request |
 | Standalone Hasura or nested DNS name | NXDOMAIN through the OS resolver |
-| Valid SQL, GraphQL and metadata inspection | Allowed, with all four source names preserved |
+| Valid SQL, GraphQL and metadata inspection | Allowed, with all registered source names preserved |
 
 An early SQL probe failed because PostgreSQL denied table modification after transaction control had escaped read-only mode. Treating any 4xx as proof of read-only enforcement would have missed this. The strengthened exercise now requires proxy-level 403 for those attempts, and regression tests verify that no upstream request is made. Other focused tests cover grant reduction, upstream redirects, credential stripping and assurance downgrade.
 

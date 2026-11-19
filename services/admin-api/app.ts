@@ -20,6 +20,7 @@ import {
 } from "../../packages/operations/cloudflare.ts";
 import { authenticate, authRoutes, requestActor } from "./auth.ts";
 import { canViewHasura, hasuraRoutes } from "./hasura.ts";
+import { configuredDomains } from "./domains.ts";
 const clusterScope = (grants: string[]) =>
   applications.every((a) => grants.includes(a.id));
 const applicationActions = new Set([
@@ -106,6 +107,7 @@ export async function admin(db: pg.Pool) {
       peers: cluster ? peers.rows : [],
       administrators:
         cluster && who.actions.includes("admins.manage") ? admins.rows : [],
+      domains: await configuredDomains(),
     };
   });
   app.get("/metrics", async (req, reply) => {

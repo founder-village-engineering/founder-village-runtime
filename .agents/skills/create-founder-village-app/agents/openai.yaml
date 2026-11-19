@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create Founder Village App"
+  short_description: "Build a runtime-backed Pages app"
+  default_prompt: "Use $create-founder-village-app to create a database-backed Founder Village frontend and its reusable Cloudflare Pages release path."

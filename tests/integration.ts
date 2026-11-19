@@ -152,7 +152,123 @@ try {
     assert(!nsRecords.body.includes(record.id));
   }
   proof.push(
-    "four real application databases, application membership denial and isolated writes",
+    "registered application databases, application membership denial and isolated writes",
+  );
+
+  const deliveryToken = await localToken("founders"),
+    deliveryHeaders = {
+      authorization: "Bearer " + deliveryToken,
+      "x-tenant-id": tid,
+      "x-application-id": "founders",
+    },
+    deliveryKey = randomUUID(),
+    deliveryPayload = {
+      provider: "ifood",
+      providerOrderId: "IFOOD-" + randomUUID(),
+      restaurantName: "Synthetic Kitchen",
+      deliveryAddress: "Demo Village reception",
+      subtotalCents: 5400,
+      deliveryFeeCents: 700,
+      serviceFeeCents: 300,
+      expectedAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+    };
+  const profileBefore = await app.inject({
+    url: "/founders/me",
+    headers: deliveryHeaders,
+  });
+  assert.equal(profileBefore.statusCode, 200, profileBefore.body);
+  const founderBefore = profileBefore.json() as {
+    fullName: string;
+    companies: Array<{ name: string }>;
+    balance: { balanceCents: number };
+  };
+  assert.equal(founderBefore.fullName, "Alex Founder");
+  assert.deepEqual(
+    founderBefore.companies.map((company) => company.name),
+    ["Canopy Labs", "Open Courtyard"],
+  );
+  const delivery = await app.inject({
+    method: "POST",
+    url: "/food-deliveries",
+    headers: { ...deliveryHeaders, "idempotency-key": deliveryKey },
+    payload: deliveryPayload,
+  });
+  assert.equal(delivery.statusCode, 201, delivery.body);
+  const createdDelivery = delivery.json() as {
+    id: string;
+    expenseId: string;
+    expenseStatus: string;
+    totalCents: number;
+  };
+  assert.equal(createdDelivery.expenseStatus, "posted");
+  assert.equal(createdDelivery.totalCents, 6400);
+  const deliveryReplay = await app.inject({
+    method: "POST",
+    url: "/food-deliveries",
+    headers: { ...deliveryHeaders, "idempotency-key": deliveryKey },
+    payload: deliveryPayload,
+  });
+  assert.equal(deliveryReplay.statusCode, 200, deliveryReplay.body);
+  const replayedDelivery = deliveryReplay.json() as {
+    id: string;
+    expenseId: string;
+  };
+  assert.equal(replayedDelivery.id, createdDelivery.id);
+  assert.equal(replayedDelivery.expenseId, createdDelivery.expenseId);
+  const deliveryConflict = await app.inject({
+    method: "POST",
+    url: "/food-deliveries",
+    headers: { ...deliveryHeaders, "idempotency-key": deliveryKey },
+    payload: { ...deliveryPayload, restaurantName: "Changed restaurant" },
+  });
+  assert.equal(deliveryConflict.statusCode, 409);
+  const deliveryOrders = await app.inject({
+    url: "/food-deliveries",
+    headers: deliveryHeaders,
+  });
+  assert.equal(deliveryOrders.statusCode, 200, deliveryOrders.body);
+  assert(
+    (deliveryOrders.json() as Array<{ id: string }>).some(
+      (order) => order.id === createdDelivery.id,
+    ),
+  );
+  const expenses = await app.inject({
+    url: "/expenses",
+    headers: deliveryHeaders,
+  });
+  assert.equal(expenses.statusCode, 200, expenses.body);
+  const matchingExpenses = (
+    expenses.json() as Array<{
+      id: string;
+      direction: string;
+      category: string;
+      status: string;
+      amountCents: number;
+      currency: string;
+    }>
+  ).filter((expense) => expense.id === createdDelivery.expenseId);
+  assert.equal(matchingExpenses.length, 1);
+  assert.equal(matchingExpenses[0]!.id, createdDelivery.expenseId);
+  assert.equal(matchingExpenses[0]!.direction, "charge");
+  assert.equal(matchingExpenses[0]!.category, "food_delivery");
+  assert.equal(matchingExpenses[0]!.status, "posted");
+  assert.equal(matchingExpenses[0]!.amountCents, 6400);
+  assert.equal(matchingExpenses[0]!.currency, "BRL");
+  const profileAfter = await app.inject({
+    url: "/founders/me",
+    headers: deliveryHeaders,
+  });
+  assert.equal(profileAfter.statusCode, 200, profileAfter.body);
+  assert.equal(
+    (
+      profileAfter.json() as {
+        balance: { balanceCents: number };
+      }
+    ).balance.balanceCents,
+    founderBefore.balance.balanceCents + 6400,
+  );
+  proof.push(
+    "founder profile and companies, atomic food expense and idempotent reload",
   );
 
   const { connection, channel } = await broker(process.env.AMQP_URL!);

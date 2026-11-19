@@ -1,5 +1,11 @@
 # Release and rollback
 
+> **Public-repository safety:** This repository is public. Be 100% careful never to commit,
+> paste, log, or otherwise expose secrets, API keys, access tokens, passwords, private keys,
+> credentials, unredacted environment values, production data, or other non-public information.
+> Use placeholders and approved secret stores, inspect staged changes before every commit, and
+> immediately rotate anything that may have been exposed.
+
 The release workflow verifies code, builds immutable artifacts, signs the application image and source/runtime artifacts, and records exact digests. GitHub production environment protections and a dedicated trusted `fv-deploy` runner must be configured in the account; checked-in workflow files alone do not enable those settings.
 
 Deployments run from a clean matching source revision. Private environment manifests and state remain outside Git. The deployer checks the image registry and workflow signer, configuration/input fingerprints, backup freshness, migrations, Hasura metadata, inactive candidate readiness, proxy cutover, serving revision, and worker replacement. Application colors preserve independent immutable image/revision settings.

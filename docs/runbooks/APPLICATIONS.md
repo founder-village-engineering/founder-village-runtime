@@ -1,6 +1,14 @@
-# Applications, access, and WireGuard
+# Applications, frontends, access, and WireGuard
 
-The initial namespaces are `founder-village`, `founder-farm`, `founder-cafe`, and `founder-residences`. They are separate databases, not schema aliases for one database. Registry database and Hasura names are exact; GraphQL namespaces use underscores because GraphQL identifiers cannot contain hyphens.
+> **Public-repository safety:** This repository is public. Be 100% careful never to commit,
+> paste, log, or otherwise expose secrets, API keys, access tokens, passwords, private keys,
+> credentials, unredacted environment values, production data, or other non-public information.
+> Use placeholders and approved secret stores, inspect staged changes before every commit, and
+> immediately rotate anything that may have been exposed.
+
+The namespaces are `founder-village`, `founder-farm`, `founder-cafe`, `founder-residences`, and `founders`. They are separate databases, not schema aliases for one database. Registry database and Hasura names are exact; GraphQL namespaces use underscores because GraphQL identifiers cannot contain hyphens.
+
+Frontend and application identities are deliberately independent. Multiple frontends may map to one application only after an explicit product/data-boundary decision. The `founders` database is the first intentional example: `founder-food-deliveries` uses its shared member, company, and expense records plus the food-delivery feature tables. Each frontend still owns its exact origin allowlist entry and runtime-owned contract directory.
 
 ```sh
 npm run namespace:add -- founder-library 'Founder Library'
@@ -10,6 +18,34 @@ bin/fv up
 ```
 
 Review the registry/metadata diff before applying it remotely. Rendering generates private Compose overrides so an added namespace receives its own role URLs without editing a static service matrix. SQL migrations are checksummed per database. Shared migrations run first; application-specific migrations live under `database/applications/<id>/`. Never edit a migration already applied to an environment.
+
+## Frontend onboarding and contracts
+
+Each completed frontend has one manifest in `founder-village-frontends/apps/<slug>/founder-village-app.json`. For initial scaffolding, copy the skill example into an ignored path such as `founder-village-frontends/.state/new-apps/<slug>.json`; runtime onboarding rejects manifests outside the frontend repository. Use that manifest to plan and apply both repositories:
+
+```sh
+# In founder-village-frontends
+npx tsx scripts/scaffold-app.ts --manifest /absolute/path/project.json --plan
+npx tsx scripts/scaffold-app.ts --manifest /absolute/path/project.json --apply
+
+# In founder-village-runtime
+npm run frontend:add -- --manifest /absolute/path/project.json \
+  --frontends-root ../founder-village-frontends --plan
+npm run frontend:add -- --manifest /absolute/path/project.json \
+  --frontends-root ../founder-village-frontends --apply
+```
+
+The runtime registration is authoritative for the frontend-to-application mapping, application/database, exact `pages.dev` and local browser origins, frontend path, and contract source. Onboarding creates a missing application or validates an explicitly selected existing one. The allowlist uses exact origins; wildcard and suffix matching are not accepted. CORS narrows browser access but does not replace bearer verification, tenant membership, or row-level security.
+
+Canonical browser contracts are organized by frontend under `packages/frontend-contracts/<slug>/`. Never edit the generated frontend copy. During local development, run:
+
+```sh
+npm run frontend-contracts:watch -- --frontends-root ../founder-village-frontends
+```
+
+Use `frontend-contracts:sync` for a one-shot update and `frontend-contracts:check` in verification. A runtime push that changes canonical contracts or the frontend registry runs `.github/workflows/sync-frontend-contracts.yml`; after the repository secret `FOUNDER_VILLAGE_FRONTENDS_SYNC_TOKEN` is configured, that workflow opens a checksummed update pull request in `founder-village-frontends`.
+
+The repository-owned `$create-founder-village-app` skill under `.agents/skills/` contains the complete reusable workflow and cross-repository audit scripts.
 
 Grant/revoke membership using the trusted CLI procedure:
 

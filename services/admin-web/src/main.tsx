@@ -17,6 +17,7 @@ type Snapshot = {
   deployments: Row[];
   peers: Row[];
   administrators: Row[];
+  domains: Row[];
 };
 const pages = [
   "Overview",
@@ -407,7 +408,8 @@ function App() {
                         "Promote a verified release. Keep a safe path back.",
                       Backups: "Recovery starts with evidence you can trust.",
                       Operations: "Durable work, with an accountable owner.",
-                      Domains: "Review DNS changes before applying them.",
+                      Domains:
+                        "See every configured subdomain and review DNS changes safely.",
                       Access: "Named people. Explicit permissions.",
                       Audit: "A permanent record of administrative activity.",
                     }[page]
@@ -722,6 +724,30 @@ function App() {
           )}
           {page === "Domains" && (
             <>
+              <section>
+                <div className="section-title">
+                  <h2>Configured subdomains</h2>
+                  <span className="pill good">
+                    {data.domains.length} routes
+                  </span>
+                </div>
+                <p>
+                  Hostnames come from the active runtime configuration. Service
+                  names identify the process behind each route; aliases can
+                  share a service without creating a separate environment.
+                </p>
+                <Table
+                  rows={data.domains}
+                  columns={[
+                    ["subdomain", "Subdomain"],
+                    ["hostname", "Hostname"],
+                    ["service", "Service"],
+                    ["target", "Target"],
+                    ["source", "Source"],
+                  ]}
+                  empty="No domain routes are available for your current scope."
+                />
+              </section>
               <section>
                 <h2>Plan a DNS change</h2>
                 <p>

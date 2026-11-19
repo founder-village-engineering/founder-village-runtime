@@ -1,5 +1,11 @@
 # Founder Village Runtime
 
+> **Public-repository safety:** This repository is public. Be 100% careful never to commit,
+> paste, log, or otherwise expose secrets, API keys, access tokens, passwords, private keys,
+> credentials, unredacted environment values, production data, or other non-public information.
+> Use placeholders and approved secret stores, inspect staged changes before every commit, and
+> immediately rotate anything that may have been exposed.
+
 Rust runtime control, TypeScript API/admin/workers, PostgreSQL + pgvector, private Hasura, RabbitMQ, deployment automation, encrypted recovery, domain management, and WireGuard device profiles.
 
 Authored application and automation sources are **TypeScript only** (`.ts`/`.tsx`). Runtime control is Rust; minimal host/container entrypoints are shell. Generated compiler/browser artifacts live in ignored build directories.
@@ -14,8 +20,13 @@ Authored application and automation sources are **TypeScript only** (`.ts`/`.tsx
 | Founder Farm | `founder-farm` | `founder-farm` | `founder_farm` |
 | Founder Cafe | `founder-cafe` | `founder-cafe` | `founder_cafe` |
 | Founder Residences | `founder-residences` | `founder-residences` | `founder_residences` |
+| Founders | `founders` | `founders` | `founders` |
 
 Each database has its own API, worker, Hasura, migration, and monitoring login. `PUBLIC` cannot connect to application databases. Shared privilege groups cannot log in. `fv_control` and `fv_hasura` are internal control-plane and Hasura metadata databases. Staging and production use separate hosts and credentials; application database names stay the same in each environment.
+
+The `founders` application is intentionally a shared data boundary for founder-facing frontends. Its first schema owns founder members, each founder's companies, the organization expense ledger, and food deliveries. Recording a food delivery creates its matching posted expense atomically. The first registered frontend is `founder-food-deliveries`; future founder tools should map to this application only when they belong to the same data boundary.
+
+`config/frontends.json` is the canonical browser frontend registry. It maps each static Cloudflare Pages project to one application and its exact production/local origins. Runtime-owned TypeScript contracts live under `packages/frontend-contracts/<frontend>/` and are copied, with a checksummed ownership marker, into the matching frontend by `npm run frontend-contracts:sync`. See [application onboarding](docs/runbooks/APPLICATIONS.md).
 
 ## Local startup
 
@@ -56,7 +67,7 @@ To execute console operations, also run `bin/fv ops` for the constrained host ru
 
 Run `bin/fv admin-login --open` to sign in to **https://admin.fv**. The CLI issues a single-use link that expires in five minutes. Codes and sessions are stored as hashes; the browser removes the sign-in fragment before requesting protected content. The API uses **https://api.fv**, forwarding to http://127.0.0.1:43801. Other published routes are **https://workers.fv** and **https://monitor.fv**. All names have exactly one label before `.fv`; nested names are rejected. Add future services to `config/local-domains.json`. See [local DNS and HTTPS](docs/runbooks/LOCAL_DOMAINS.md).
 
-**https://api-dev.fv** is an alias of the existing local API and shares its data. Hasura has no published hostname: root administrators inspect all four sources through the **Hasura** page inside `admin.fv`. The server supplies its private credential; browser requests use the existing authenticated session and CSRF protection. Inspection is read-only; schema and metadata changes use versioned migrations and the constrained operation catalog.
+**https://api-dev.fv** is an alias of the existing local API and shares its data. Hasura has no published hostname: root administrators inspect all registered sources through the **Hasura** page inside `admin.fv`. The server supplies its private credential; browser requests use the existing authenticated session and CSRF protection. Inspection is read-only; schema and metadata changes use versioned migrations and the constrained operation catalog.
 
 The one-time `local-edge setup` command starts the dedicated `fv-local` DNS/TLS containers and uses macOS administrator authentication to install a scoped `.fv` resolver and trust this runtime's local CA in your login keychain. The edge listens on IPv6 loopback `[::1]:443`, preserving Archlife's existing IPv4 HTTPS listener. Subsequent local starts bring up the edge automatically. No public DNS or provider account is needed. Direct loopback URLs remain available for diagnostics and fixtures; Hasura still requires its private admin secret.
 
@@ -71,6 +82,8 @@ Vite asset development uses `npm run dev -w services/admin-web` on port 43800. V
 ## API and tenant access
 
 API requests carry a verified OIDC bearer token, `x-application-id`, and `x-tenant-id`. The application header defaults to `founder-village` for the initial client. Unknown application IDs are rejected; membership is checked inside the selected database. Clients cannot supply trusted Hasura roles or actor identities.
+
+Existing unversioned routes remain supported. Clients that need a contract pinned across breaking backend changes can use the equivalent `/v1/...` routes. `/api/versions` publishes supported versions and lifecycle state; `/openapi.json` and `/v1/openapi.json` publish the unversioned and explicit v1 contracts. A new major never silently repoints the unversioned surface. See [public API versioning](docs/runbooks/API_VERSIONING.md).
 
 `POST /records` accepts `{ "content": "example", "embedding": [1, 0.1, 0.2] }` and a UUID `idempotency-key`. It atomically writes a record and an outbox job. Workers process the durable job once at the effect boundary despite repeated delivery. `GET /records`, `POST /search`, the scoped `/graphql` relay, and signed file URL endpoints share the same membership boundary.
 

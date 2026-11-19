@@ -242,7 +242,7 @@ try {
     400,
   );
   await check(
-    "all four private metadata sources remain available",
+    "all registered private metadata sources remain available",
     async () => {
       const response = await request("/hasura/v1/metadata", metadata, root);
       assert.equal(response.status, 200);

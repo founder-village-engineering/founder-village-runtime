@@ -1,0 +1,249 @@
+[
+  {
+    "table": { "schema": "app", "name": "members" },
+    "array_relationships": [
+      {
+        "name": "companies",
+        "using": {
+          "manual_configuration": {
+            "remote_table": { "schema": "app", "name": "companies" },
+            "column_mapping": {
+              "tenant_id": "tenant_id",
+              "id": "founder_id"
+            },
+            "insertion_order": null
+          }
+        }
+      },
+      {
+        "name": "expenses",
+        "using": {
+          "manual_configuration": {
+            "remote_table": { "schema": "app", "name": "expenses" },
+            "column_mapping": {
+              "tenant_id": "tenant_id",
+              "id": "founder_id"
+            },
+            "insertion_order": null
+          }
+        }
+      },
+      {
+        "name": "food_deliveries",
+        "using": {
+          "manual_configuration": {
+            "remote_table": {
+              "schema": "app",
+              "name": "food_deliveries"
+            },
+            "column_mapping": {
+              "tenant_id": "tenant_id",
+              "id": "founder_id"
+            },
+            "insertion_order": null
+          }
+        }
+      }
+    ],
+    "select_permissions": [
+      {
+        "role": "user_founders",
+        "permission": {
+          "columns": [
+            "id",
+            "tenant_id",
+            "full_name",
+            "email",
+            "phone",
+            "room",
+            "status",
+            "created_at",
+            "updated_at"
+          ],
+          "filter": {
+            "_and": [
+              { "tenant_id": { "_eq": "X-Hasura-Tenant-Id" } },
+              { "actor": { "_eq": "X-Hasura-User-Id" } }
+            ]
+          },
+          "limit": 1,
+          "allow_aggregations": false
+        }
+      }
+    ]
+  },
+  {
+    "table": { "schema": "app", "name": "companies" },
+    "object_relationships": [
+      {
+        "name": "founder",
+        "using": {
+          "manual_configuration": {
+            "remote_table": { "schema": "app", "name": "members" },
+            "column_mapping": {
+              "tenant_id": "tenant_id",
+              "founder_id": "id"
+            },
+            "insertion_order": null
+          }
+        }
+      }
+    ],
+    "select_permissions": [
+      {
+        "role": "user_founders",
+        "permission": {
+          "columns": [
+            "id",
+            "tenant_id",
+            "founder_id",
+            "name",
+            "legal_name",
+            "website",
+            "active",
+            "created_at",
+            "updated_at"
+          ],
+          "filter": {
+            "_and": [
+              { "tenant_id": { "_eq": "X-Hasura-Tenant-Id" } },
+              { "founder": { "actor": { "_eq": "X-Hasura-User-Id" } } }
+            ]
+          },
+          "limit": 100,
+          "allow_aggregations": false
+        }
+      }
+    ]
+  },
+  {
+    "table": { "schema": "app", "name": "expenses" },
+    "object_relationships": [
+      {
+        "name": "founder",
+        "using": {
+          "manual_configuration": {
+            "remote_table": { "schema": "app", "name": "members" },
+            "column_mapping": {
+              "tenant_id": "tenant_id",
+              "founder_id": "id"
+            },
+            "insertion_order": null
+          }
+        }
+      },
+      {
+        "name": "company",
+        "using": {
+          "manual_configuration": {
+            "remote_table": { "schema": "app", "name": "companies" },
+            "column_mapping": {
+              "tenant_id": "tenant_id",
+              "company_id": "id"
+            },
+            "insertion_order": null
+          }
+        }
+      }
+    ],
+    "select_permissions": [
+      {
+        "role": "user_founders",
+        "permission": {
+          "columns": [
+            "id",
+            "tenant_id",
+            "founder_id",
+            "company_id",
+            "direction",
+            "status",
+            "category",
+            "description",
+            "amount_cents",
+            "currency",
+            "incurred_at",
+            "source_type",
+            "source_id",
+            "created_at",
+            "updated_at"
+          ],
+          "filter": {
+            "_and": [
+              { "tenant_id": { "_eq": "X-Hasura-Tenant-Id" } },
+              { "founder": { "actor": { "_eq": "X-Hasura-User-Id" } } }
+            ]
+          },
+          "limit": 100,
+          "allow_aggregations": false
+        }
+      }
+    ]
+  },
+  {
+    "table": { "schema": "app", "name": "food_deliveries" },
+    "object_relationships": [
+      {
+        "name": "founder",
+        "using": {
+          "manual_configuration": {
+            "remote_table": { "schema": "app", "name": "members" },
+            "column_mapping": {
+              "tenant_id": "tenant_id",
+              "founder_id": "id"
+            },
+            "insertion_order": null
+          }
+        }
+      },
+      {
+        "name": "expense",
+        "using": {
+          "manual_configuration": {
+            "remote_table": { "schema": "app", "name": "expenses" },
+            "column_mapping": {
+              "tenant_id": "tenant_id",
+              "expense_id": "id"
+            },
+            "insertion_order": null
+          }
+        }
+      }
+    ],
+    "select_permissions": [
+      {
+        "role": "user_founders",
+        "permission": {
+          "columns": [
+            "id",
+            "tenant_id",
+            "founder_id",
+            "expense_id",
+            "provider",
+            "provider_order_id",
+            "restaurant_name",
+            "delivery_address",
+            "subtotal_cents",
+            "delivery_fee_cents",
+            "service_fee_cents",
+            "total_cents",
+            "currency",
+            "status",
+            "placed_at",
+            "expected_at",
+            "notes",
+            "created_at",
+            "updated_at"
+          ],
+          "filter": {
+            "_and": [
+              { "tenant_id": { "_eq": "X-Hasura-Tenant-Id" } },
+              { "founder": { "actor": { "_eq": "X-Hasura-User-Id" } } }
+            ]
+          },
+          "limit": 100,
+          "allow_aggregations": false
+        }
+      }
+    ]
+  }
+]

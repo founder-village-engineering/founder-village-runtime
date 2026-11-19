@@ -1,5 +1,11 @@
 # ADR 0001: Runtime and trust boundaries
 
+> **Public-repository safety:** This repository is public. Be 100% careful never to commit,
+> paste, log, or otherwise expose secrets, API keys, access tokens, passwords, private keys,
+> credentials, unredacted environment values, production data, or other non-public information.
+> Use placeholders and approved secret stores, inspect staged changes before every commit, and
+> immediately rotate anything that may have been exposed.
+
 Accepted implementation baseline, 2026-11-16.
 
 A Rust workspace owns deterministic rendering, Hetzner resource convergence, host setup, deployment, backup orchestration, and WireGuard. A locked Node/TypeScript project owns the public API, admin backend, browser console, durable workers, domain adapter, monitoring, and automation scripts. Frontend bundles and compiled runtime files are generated artifacts.

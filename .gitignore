@@ -13,3 +13,5 @@ test-results/
 .DS_Store
 .cloudflare/
 .cache/
+__pycache__/
+*.pyc

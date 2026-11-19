@@ -1,0 +1,11 @@
+[
+  {
+    "id": "founder-food-deliveries",
+    "application": "founders",
+    "pagesProject": "founder-food-deliveries",
+    "productionOrigin": "https://founder-food-deliveries.pages.dev",
+    "localOrigins": ["https://food-deliveries.fv", "http://127.0.0.1:43910"],
+    "frontendPath": "apps/founder-food-deliveries",
+    "contractSource": "packages/frontend-contracts/founder-food-deliveries"
+  }
+]

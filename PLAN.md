@@ -1,5 +1,11 @@
 # Founder Village Runtime — Implementation Plan
 
+> **Public-repository safety:** This repository is public. Be 100% careful never to commit,
+> paste, log, or otherwise expose secrets, API keys, access tokens, passwords, private keys,
+> credentials, unredacted environment values, production data, or other non-public information.
+> Use placeholders and approved secret stores, inspect staged changes before every commit, and
+> immediately rotate anything that may have been exposed.
+
 Status: implemented runtime code and local verification are tracked in `IMPLEMENTATION.md`. Live provider activation and operational attestations remain separate. Authored JavaScript/MJS files are prohibited; application and automation sources use TypeScript.
 
 ## 1. Outcome and scope

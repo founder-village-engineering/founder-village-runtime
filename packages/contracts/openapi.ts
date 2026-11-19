@@ -1,11 +1,25 @@
 import { z } from "zod";
 import { recordInput, vectorQuery, operation } from "./index.ts";
+import { foodDeliveryInputSchema } from "../frontend-contracts/founder-food-deliveries/index.ts";
+import {
+  unversionedPublicApiContract,
+  type PublicApiVersion,
+} from "./api-versioning.ts";
 const json = (schema: unknown) => ({ "application/json": { schema } });
 const response = (
   description: string,
   schema: unknown = { type: "object" },
 ) => ({ description, content: json(schema) });
-export function publicApiDocument(names: string[]) {
+type PublicApiDocumentOptions = {
+  contract?: PublicApiVersion;
+  serverUrl?: string;
+};
+
+export function publicApiDocument(
+  names: string[],
+  options: PublicApiDocumentOptions = {},
+) {
+  const contract = options.contract ?? unversionedPublicApiContract;
   const scope = [
     {
       name: "x-application-id",
@@ -28,7 +42,12 @@ export function publicApiDocument(names: string[]) {
   const body = (schema: unknown) => ({ required: true, content: json(schema) });
   return {
     openapi: "3.1.0",
-    info: { title: "Founder Village API", version: "0.1.0" },
+    info: {
+      title: "Founder Village API",
+      version: contract.semanticVersion,
+    },
+    servers: [{ url: options.serverUrl ?? "/" }],
+    "x-api-contract": contract.id,
     security: [{ bearerAuth: [] }],
     components: {
       securitySchemes: {
@@ -37,6 +56,7 @@ export function publicApiDocument(names: string[]) {
       schemas: {
         RecordInput: z.toJSONSchema(recordInput),
         VectorQuery: z.toJSONSchema(vectorQuery),
+        FoodDeliveryInput: z.toJSONSchema(foodDeliveryInputSchema),
       },
     },
     paths: {
@@ -129,6 +149,63 @@ export function publicApiDocument(names: string[]) {
             },
           }),
           responses: { "200": response("Upload grant"), ...protectedResponses },
+        },
+      },
+      "/founders/me": {
+        get: {
+          summary: "Read the current founder profile, companies, and balance",
+          parameters: scope,
+          responses: {
+            "200": response("Founder profile"),
+            ...protectedResponses,
+          },
+        },
+      },
+      "/expenses": {
+        get: {
+          summary: "List the current founder's organization expenses",
+          parameters: scope,
+          responses: {
+            "200": response("Founder expenses", {
+              type: "array",
+              items: { type: "object" },
+            }),
+            ...protectedResponses,
+          },
+        },
+      },
+      "/food-deliveries": {
+        get: {
+          summary: "List the current founder's food deliveries",
+          parameters: scope,
+          responses: {
+            "200": response("Food deliveries", {
+              type: "array",
+              items: { type: "object" },
+            }),
+            ...protectedResponses,
+          },
+        },
+        post: {
+          summary: "Record a food delivery and atomically create its expense",
+          parameters: [
+            ...scope,
+            {
+              name: "idempotency-key",
+              in: "header",
+              required: true,
+              schema: { type: "string", format: "uuid" },
+            },
+          ],
+          requestBody: body({
+            $ref: "#/components/schemas/FoodDeliveryInput",
+          }),
+          responses: {
+            "201": response("Food delivery and expense created"),
+            "200": response("Idempotent replay"),
+            "409": response("Idempotency conflict"),
+            ...protectedResponses,
+          },
         },
       },
     },

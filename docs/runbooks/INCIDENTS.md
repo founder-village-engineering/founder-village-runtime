@@ -1,5 +1,11 @@
 # Incident response
 
+> **Public-repository safety:** This repository is public. Be 100% careful never to commit,
+> paste, log, or otherwise expose secrets, API keys, access tokens, passwords, private keys,
+> credentials, unredacted environment values, production data, or other non-public information.
+> Use placeholders and approved secret stores, inspect staged changes before every commit, and
+> immediately rotate anything that may have been exposed.
+
 1. Identify the affected environment/application, operator, UTC time, observed impact, and serving release. Preserve receipts, audit checkpoints, volumes, and relevant redacted diagnostics. Do not copy payloads or credentials into general logs or tickets.
 2. Contain the affected identity/service at its narrowest effective boundary: revoke sessions/memberships/Access grants or close declared ingress; preserve management access and independent alerting. A provider or identity outage must not force reliance on the browser console for recovery.
 3. Treat an API/container compromise separately from host/provider compromise. Rotate all reachable credentials when the host boundary is lost, including backup ingestion credentials; independently verify immutable/offline recovery copies before trusting the compromised host's claims.

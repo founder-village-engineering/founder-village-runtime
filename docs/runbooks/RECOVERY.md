@@ -1,5 +1,11 @@
 # Backup and disaster recovery
 
+> **Public-repository safety:** This repository is public. Be 100% careful never to commit,
+> paste, log, or otherwise expose secrets, API keys, access tokens, passwords, private keys,
+> credentials, unredacted environment values, production data, or other non-public information.
+> Use placeholders and approved secret stores, inspect staged changes before every commit, and
+> immediately rotate anything that may have been exposed.
+
 Targets: PostgreSQL RPO ≤ 300 seconds, full-runtime RTO ≤ 4 hours, object/config RPO ≤ 24 hours. These require measurement on the actual provider, workload, credentials, and network.
 
 The database image includes pgvector and pinned pgBackRest. PostgreSQL archives WAL continuously. Local fixtures use an encrypted local repository; remote environments use encrypted S3 storage. A daily full-backup systemd timer is the conservative implementation default; `backup capture --kind diff` supports an operator-selected differential cadence. Keep the full dependency chain for the configured 30-day window.

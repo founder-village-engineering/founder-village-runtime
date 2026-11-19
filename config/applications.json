@@ -22,5 +22,11 @@
     "database": "founder-residences",
     "hasuraSource": "founder-residences",
     "owner": "Founder Residences"
+  },
+  {
+    "id": "founders",
+    "database": "founders",
+    "hasuraSource": "founders",
+    "owner": "Founder Village Founders"
   }
 ]

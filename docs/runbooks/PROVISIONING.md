@@ -1,5 +1,11 @@
 # Provisioning and first launch
 
+> **Public-repository safety:** This repository is public. Be 100% careful never to commit,
+> paste, log, or otherwise expose secrets, API keys, access tokens, passwords, private keys,
+> credentials, unredacted environment values, production data, or other non-public information.
+> Use placeholders and approved secret stores, inspect staged changes before every commit, and
+> immediately rotate anything that may have been exposed.
+
 The first supported remote release target is Ubuntu 24.04 on Linux amd64. Local arm64 container verification is separate. Staging and production must use separate VPS resources and secret catalogs.
 
 1. Copy `config/remote.example.json` to an environment-specific private manifest. Set `environment`, a unique resource `project`, provider region/type/image and SSH key IDs, narrow bootstrap SSH CIDRs, management CIDR, owned domains, Cloudflare account/zone/team, OIDC endpoints/audiences/client ID and root-owned `auth.root_actors`, backup endpoint/bucket/region, and independently verified immutable-copy custody. The staging example contains placeholders and must be deliberately completed; it is not production-ready. Use exactly one label under the owned zone for API/admin and managed records, such as `api-dev.example.com`; nested names and the private `.fv` namespace are not public deployment names.
