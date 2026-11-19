@@ -1,4 +1,5 @@
 import { test, expect, type Locator } from "@playwright/test";
+import { signIn } from "./sign-in.ts";
 
 test("text fields dismiss on an outside tap across every form screen", async ({
   page,
@@ -8,8 +9,7 @@ test("text fields dismiss on an outside tap across every form screen", async ({
       ? target.tap({ position })
       : target.click({ position });
 
-  await page.goto("/");
-  await page.getByRole("button", { name: /Open local console/ }).click();
+  await signIn(page);
   await expect(
     page.getByRole("heading", { name: "A clear view of everything." }),
   ).toBeVisible();

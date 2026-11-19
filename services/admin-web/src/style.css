@@ -269,6 +269,7 @@ p {
   font-family: monospace;
 }
 section {
+  min-width: 0;
   background: #fff;
   border: 1px solid #e0e5dc;
   border-radius: 10px;
@@ -640,7 +641,39 @@ footer {
   background: #f2f5ed;
   border-color: #dce5d4;
 }
+.hasura-panel {
+  padding: 18px;
+  min-width: 0;
+}
+.hasura-panel .section-title {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.hasura-viewport {
+  overflow: auto;
+  border: 1px solid #dce5d4;
+  border-radius: 10px;
+}
+.hasura-mobile-hint {
+  display: none;
+}
+.hasura-frame {
+  display: block;
+  width: 100%;
+  min-height: 780px;
+  height: 78vh;
+  border: 0;
+  background: white;
+}
 @media (max-width: 720px) {
+  .hasura-frame {
+    min-width: 1000px;
+  }
+  .hasura-mobile-hint {
+    display: block;
+    font-size: 11px;
+  }
   header {
     flex-wrap: wrap;
     height: auto;

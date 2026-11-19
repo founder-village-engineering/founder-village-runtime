@@ -2,5 +2,4 @@
 set -eu
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
-case "${1:-}" in api|admin|workers|domain-worker) ;; *) echo 'Usage: bin/dev api|admin|workers|domain-worker' >&2; exit 1;; esac
-exec node --env-file=.state/local.env --import tsx "services/$1/main.ts"
+exec "$ROOT/bin/fv" dev "$@"

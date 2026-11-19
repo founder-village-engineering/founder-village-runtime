@@ -19,6 +19,7 @@ import {
   fingerprint,
 } from "../../packages/operations/cloudflare.ts";
 import { authenticate, authRoutes, requestActor } from "./auth.ts";
+import { canViewHasura, hasuraRoutes } from "./hasura.ts";
 const clusterScope = (grants: string[]) =>
   applications.every((a) => grants.includes(a.id));
 const applicationActions = new Set([
@@ -35,6 +36,7 @@ function requireCluster(grants: string[]) {
 export async function admin(db: pg.Pool) {
   const app = await server("admin");
   await authRoutes(app, db);
+  await hasuraRoutes(app, db);
   app.addHook("onResponse", async (req, reply) => {
     if (reply.statusCode >= 400) {
       try {
@@ -93,6 +95,7 @@ export async function admin(db: pg.Pool) {
       environment: environment(),
       revision: process.env.FV_REVISION ?? "local",
       actor: who.actor,
+      hasura: canViewHasura(who),
       actions: who.actions.filter(
         (action) => cluster || applicationActions.has(action),
       ),

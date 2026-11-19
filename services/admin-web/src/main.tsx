@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useKeyboardDismiss } from "./useKeyboardDismiss.ts";
+import { HasuraConsole } from "./HasuraConsole.tsx";
 import "./style.css";
 type Row = Record<string, unknown>;
 type Snapshot = {
@@ -8,6 +9,7 @@ type Snapshot = {
   environment: string;
   revision: string;
   actor: string;
+  hasura: boolean;
   actions: string[];
   operations: Row[];
   audit: Row[];
@@ -19,6 +21,7 @@ type Snapshot = {
 const pages = [
   "Overview",
   "Databases",
+  "Hasura",
   "Deployments",
   "Backups",
   "Operations",
@@ -49,7 +52,8 @@ async function request<T>(url: string, body?: unknown): Promise<T> {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!res.ok) {
-    if (res.status === 401) throw new Error("Sign in to continue.");
+    if (res.status === 401)
+      throw Object.assign(new Error("Sign in to continue."), { status: 401 });
     if (res.status === 403)
       throw new Error("Your account does not have permission for this action.");
     throw new Error(`The request could not be completed (${res.status}).`);
@@ -136,6 +140,8 @@ function App() {
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
     [local, setLocal] = useState(false),
+    [fixtureLogin, setFixtureLogin] = useState(false),
+    [loginCode, setLoginCode] = useState(""),
     [review, setReview] = useState<{ action: string; parameters: Row } | null>(
       null,
     ),
@@ -175,14 +181,28 @@ function App() {
       setData(await request<Snapshot>("/api/dashboard"));
       setError("");
     } catch (e) {
+      if ((e as { status?: number }).status === 401) setData(null);
       setError((e as Error).message);
     }
   };
   useEffect(() => {
-    void request<{ local: boolean }>("/auth/status").then((r) =>
-      setLocal(r.local),
-    );
-    void refresh();
+    const fragment = new URLSearchParams(window.location.hash.slice(1));
+    const code = fragment.get("admin-login");
+    if (code)
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + window.location.search,
+      );
+    void request<{ local: boolean; fixtureLogin: boolean }>("/auth/status")
+      .then(async (r) => {
+        setLocal(r.local);
+        setFixtureLogin(r.fixtureLogin);
+        if (r.local && code)
+          await perform(() => request("/auth/local", { code }), "Signed in.");
+        else await refresh();
+      })
+      .catch((e: Error) => setError(e.message));
     const timer = setInterval(() => {
       if (!document.hidden) void refresh();
     }, 5000);
@@ -230,7 +250,7 @@ function App() {
             {error}
           </p>
         )}
-        {local ? (
+        {local && fixtureLogin ? (
           <button
             disabled={busy}
             onClick={() =>
@@ -242,6 +262,34 @@ function App() {
           >
             Open local console <span>↗</span>
           </button>
+        ) : local ? (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void perform(
+                () => request("/auth/local", { code: loginCode }),
+                "Signed in.",
+              );
+              setLoginCode("");
+            }}
+          >
+            <p>
+              Use a single-use sign-in link from this computer, or paste its
+              code below.
+            </p>
+            <code>bin/fv admin-login --open</code>
+            <label>
+              One-time sign-in code
+              <input
+                type="password"
+                autoComplete="one-time-code"
+                required
+                value={loginCode}
+                onChange={(e) => setLoginCode(e.target.value)}
+              />
+            </label>
+            <button disabled={busy}>Sign in securely ↗</button>
+          </form>
         ) : (
           <a className="button" href="/auth/login">
             Sign in securely ↗
@@ -249,7 +297,9 @@ function App() {
         )}
         <small>
           {local
-            ? "Synthetic local administrator · development only"
+            ? fixtureLogin
+              ? "Synthetic fixture login · test process only"
+              : "Links expire after five minutes and can be used once."
             : "Administrator access requires MFA and an explicit grant."}
         </small>
       </main>
@@ -274,19 +324,33 @@ function App() {
           <span className="workspace-tag">ENV</span>
         </div>
         <nav aria-label="Main navigation">
-          {pages.map((p, i) => (
-            <button
-              key={p}
-              className={page === p ? "selected" : ""}
-              onClick={() => setPage(p)}
-            >
-              <span aria-hidden="true">
-                {["◫", "▦", "↗", "▤", "⇄", "◎", "♧", "≡"][i]}
-              </span>
-              {p}
-              {p === "Operations" && pending > 0 && <b>{pending}</b>}
-            </button>
-          ))}
+          {pages
+            .filter((p) => p !== "Hasura" || data.hasura)
+            .map((p) => (
+              <button
+                key={p}
+                className={page === p ? "selected" : ""}
+                onClick={() => setPage(p)}
+              >
+                <span aria-hidden="true">
+                  {
+                    {
+                      Overview: "◫",
+                      Databases: "▦",
+                      Hasura: "▧",
+                      Deployments: "↗",
+                      Backups: "▤",
+                      Operations: "⇄",
+                      Domains: "◎",
+                      Access: "♧",
+                      Audit: "≡",
+                    }[p]
+                  }
+                </span>
+                {p}
+                {p === "Operations" && pending > 0 && <b>{pending}</b>}
+              </button>
+            ))}
         </nav>
         <div className="sidebar-bottom">
           <span className="dot" /> Control plane connected
@@ -337,6 +401,8 @@ function App() {
                         "Infrastructure and recent activity, in one place.",
                       Databases:
                         "Separate databases and Hasura sources for every part of the village.",
+                      Hasura:
+                        "Inspect sources, tables and GraphQL within your authenticated admin session.",
                       Deployments:
                         "Promote a verified release. Keep a safe path back.",
                       Backups: "Recovery starts with evidence you can trust.",
@@ -464,7 +530,20 @@ function App() {
                 Internal control and Hasura metadata databases are kept separate
                 from these application databases.
               </p>
+              {data.hasura && (
+                <button className="secondary" onClick={() => setPage("Hasura")}>
+                  Open Hasura console →
+                </button>
+              )}
             </section>
+          )}
+          {page === "Hasura" && data.hasura && (
+            <HasuraConsole
+              source={
+                data.applications.find((a) => a.id === selectedApplication)
+                  ?.hasuraSource ?? data.applications[0]!.hasuraSource
+              }
+            />
           )}
           {page === "Deployments" && (
             <>

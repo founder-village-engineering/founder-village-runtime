@@ -23,14 +23,30 @@ Requires Docker, Rust 1.90.0, and Node 24.22.0. The CLI never removes data volum
 
 ```sh
 npm ci
-bin/fv init
-bin/fv up
-npm run build
+bin/fv local-edge setup
+npm start
 ```
 
-Start these in separate terminals:
+`npm start` (or `bin/fv start`) opens an arrow-key menu for local servers, data-stack startup/migrations, health checks, shutdown, routine checks, backups, restore drills, and release preparation/deployment/rollback. Use **Up/Down** or **j/k**, **Enter** to run, and **Esc**, **q**, or **Ctrl-C** to exit. Opening or cancelling the menu does not start services.
+
+Choose **Start local servers** to build the console, initialize the private local catalog, start PostgreSQL/RabbitMQ/Hasura, apply migrations and synthetic seeds, and launch the API, admin, workers, monitor, domain worker, and constrained Rust operation runner together. The command stays in the foreground and waits for API/admin/worker readiness. **Ctrl-C** stops only this session's host processes; the `fv-local` data containers and volumes remain available. Logs are private files under `.state/local/start/`. An occupied application port or another local start is reported without terminating existing services.
+
+Direct shortcuts also work without a menu:
 
 ```sh
+npm start -- local       # start the complete local runtime
+npm start -- --list      # list available shortcuts without running anything
+bin/fv start doctor
+bin/fv start check       # npm run check + Rust Clippy
+```
+
+Without a terminal, bare `npm start` prints the shortcut list and exits. Release prepare/deploy menu actions prompt for exact immutable inputs; scripts should use the existing `bin/fv release ...` commands with explicit arguments. Select another configuration with `npm start -- --config config/staging.private.json`. The menu shows the environment and project; release operations execute on the current host with the existing gates. The `local` shortcut requires `fv-local`. Full release verification uses local fixtures and stays an explicit action.
+
+For separate service terminals, the existing commands remain available:
+
+```sh
+bin/fv up
+npm run build
 bin/dev api
 bin/dev admin
 bin/dev workers
@@ -38,14 +54,19 @@ bin/dev workers
 
 To execute console operations, also run `bin/fv ops` for the constrained host runner and `bin/dev domain-worker` for domain/job/audit operations. Provider operations require the configured private catalog; the console preserves queued work across refreshes.
 
-Open **http://127.0.0.1:43802** and choose **Open local console**. This synthetic owner login is restricted to the local environment and a loopback connection. The API uses http://127.0.0.1:43801. Hasura's administration endpoint is loopback-only on port 43803; its secret stays in the private generated catalog. No real provider account is needed for local verification.
+Run `bin/fv admin-login --open` to sign in to **https://admin.fv**. The CLI issues a single-use link that expires in five minutes. Codes and sessions are stored as hashes; the browser removes the sign-in fragment before requesting protected content. The API uses **https://api.fv**, forwarding to http://127.0.0.1:43801. Other published routes are **https://workers.fv** and **https://monitor.fv**. All names have exactly one label before `.fv`; nested names are rejected. Add future services to `config/local-domains.json`. See [local DNS and HTTPS](docs/runbooks/LOCAL_DOMAINS.md).
+
+**https://api-dev.fv** is an alias of the existing local API and shares its data. Hasura has no published hostname: root administrators inspect all four sources through the **Hasura** page inside `admin.fv`. The server supplies its private credential; browser requests use the existing authenticated session and CSRF protection. Inspection is read-only; schema and metadata changes use versioned migrations and the constrained operation catalog.
+
+The one-time `local-edge setup` command starts the dedicated `fv-local` DNS/TLS containers and uses macOS administrator authentication to install a scoped `.fv` resolver and trust this runtime's local CA in your login keychain. The edge listens on IPv6 loopback `[::1]:443`, preserving Archlife's existing IPv4 HTTPS listener. Subsequent local starts bring up the edge automatically. No public DNS or provider account is needed. Direct loopback URLs remain available for diagnostics and fixtures; Hasura still requires its private admin secret.
 
 ```sh
 bin/fv doctor
+bin/fv local-edge doctor
 bin/fv down
 ```
 
-For UI hot reload, run `npm run dev -w services/admin-web` and set the local private catalog's `ADMIN_ORIGIN` to `http://127.0.0.1:43800` before starting the admin backend. The built console uses port 43802. Do not reuse development credentials outside local fixtures.
+Vite asset development uses `npm run dev -w services/admin-web` on port 43800. Verify authenticated journeys through the built console at `https://admin.fv`; its backend listens on port 43802. Browser test fixtures explicitly enable synthetic login in their isolated test process. Normal `start` and `bin/dev` never enable it. Do not reuse development credentials outside local fixtures.
 
 ## API and tenant access
 
@@ -68,12 +89,14 @@ Select `founder-cafe` in the application header and use a cafe membership. A vil
 ```sh
 npm run check
 npm run security:scan
+npm run security:admin  # local HTTPS red/blue exercise; runtime must be running
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 npm run test:integration
 npx playwright install chromium webkit
 npm run test:browser
+npm run test:browser:https # use the running canonical local HTTPS admin
 bin/fv backup capture
 bin/fv backup restore-drill
 ```
@@ -86,6 +109,7 @@ bin/fv backup restore-drill
 
 - [Architecture and decisions](docs/adr/0001-runtime.md)
 - [Security boundaries](docs/SECURITY.md)
+- [Administrator red/blue exercises](docs/runbooks/ADMIN_SECURITY.md)
 - [Provisioning and first launch](docs/runbooks/PROVISIONING.md)
 - [Release and rollback](docs/runbooks/DEPLOYMENT.md)
 - [Backup and disaster recovery](docs/runbooks/RECOVERY.md)

@@ -79,7 +79,13 @@ export class Cloudflare {
   }
   allowed(name: string) {
     const allowed = secret("CF_MANAGED_NAMES").split(",");
-    if (!allowed.includes(name) || !name.endsWith(`.${secret("CF_ZONE_NAME")}`))
+    const suffix = `.${secret("CF_ZONE_NAME")}`;
+    const label = name.endsWith(suffix) ? name.slice(0, -suffix.length) : "";
+    if (
+      !allowed.includes(name) ||
+      name.endsWith(".fv") ||
+      !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)
+    )
       throw Object.assign(new Error("unmanaged name"), { statusCode: 403 });
   }
   async inventory(name: string): Promise<Existing | null> {

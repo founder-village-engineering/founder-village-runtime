@@ -64,3 +64,16 @@ test("unmanaged domains never reach the CLI", async () => {
   await assert.rejects(() => cf.inventory("unrelated.example.com"));
   assert.equal(cf.calls.length, 0);
 });
+test("nested records remain forbidden even if explicitly allowlisted", async (t) => {
+  const previous = process.env.CF_MANAGED_NAMES;
+  t.after(() => {
+    process.env.CF_MANAGED_NAMES = previous;
+  });
+  process.env.CF_MANAGED_NAMES =
+    "api.dev.example.com,example.com,*.example.com,api-dev.example.com";
+  const cf = new Fixture(true);
+  for (const host of ["api.dev.example.com", "example.com", "*.example.com"])
+    await assert.rejects(() => cf.inventory(host));
+  assert.equal(cf.calls.length, 0);
+  cf.allowed("api-dev.example.com");
+});

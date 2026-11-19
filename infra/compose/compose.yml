@@ -58,7 +58,9 @@ services:
       HASURA_FOUNDER_RESIDENCES_DATABASE_URL: postgresql://fv_founder_residences_hasura:${FOUNDER_RESIDENCES_HASURA_PASSWORD}@postgres:5432/founder-residences
       HASURA_GRAPHQL_ADMIN_SECRET: ${HASURA_ADMIN_SECRET}
       HASURA_GRAPHQL_JWT_SECRET: ${HASURA_JWT_CONFIG}
-      HASURA_GRAPHQL_ENABLE_CONSOLE: 'false'
+      HASURA_GRAPHQL_ENABLE_CONSOLE: 'true'
+      HASURA_GRAPHQL_ADMIN_INTERNAL_ERRORS: 'false'
+      HASURA_GRAPHQL_CONSOLE_ASSETS_DIR: /srv/console-assets
       HASURA_GRAPHQL_DEV_MODE: 'false'
       HASURA_GRAPHQL_ENABLED_LOG_TYPES: startup,http-log
       HASURA_GRAPHQL_LOG_LEVEL: error
@@ -139,6 +141,9 @@ services:
       <<: *app-env
       CONTROL_DATABASE_URL: postgresql://fv_admin:${ADMIN_PASSWORD}@postgres:5432/fv_control
       ADMIN_ORIGIN: ${ADMIN_ORIGIN}
+      ROOT_ADMIN_ACTORS: ${ROOT_ADMIN_ACTORS}
+      HASURA_URL: http://hasura:8080
+      HASURA_ADMIN_SECRET: ${HASURA_ADMIN_SECRET}
       CF_BINARY: /app/node_modules/cf/bin/cf
       CF_SHA256: ${CF_SHA256:-}
       CF_WORK_DIR: /tmp/cf

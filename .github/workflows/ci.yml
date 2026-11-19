@@ -37,8 +37,8 @@ jobs:
         run: |
           docker build -f infra/images/app.Dockerfile -t fv-runtime:local .
           docker compose --project-directory . --env-file .state/local.env -f infra/compose/compose.yml -f .state/local/applications.compose.json --profile applications up -d --no-build --wait --wait-timeout 90 api-blue api-green admin workers caddy
-          curl --fail --silent --show-error -H 'Host: api.fv.test' http://127.0.0.1:43880/health/ready
-          curl --fail --silent --show-error -H 'Host: admin.fv.test' http://127.0.0.1:43880/health/ready
+          curl --fail --silent --show-error -H 'Host: api.fv' http://127.0.0.1:43880/health/ready
+          curl --fail --silent --show-error -H 'Host: admin.fv' http://127.0.0.1:43880/health/ready
       - run: ./target/debug/fv backup capture && ./target/debug/fv backup restore-drill
       - if: always()
         run: ./target/debug/fv down

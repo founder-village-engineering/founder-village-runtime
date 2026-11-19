@@ -74,6 +74,35 @@ pub fn identifier(s: &str) -> bool {
 pub fn domain(s: &str) -> bool {
     s.len() < 254 && s.contains('.') && s.split('.').all(identifier)
 }
+pub fn direct_subdomain(host: &str, zone: &str) -> bool {
+    domain(host)
+        && (domain(zone) || zone == "fv")
+        && host
+            .strip_suffix(&format!(".{zone}"))
+            .is_some_and(identifier)
+}
+pub fn validate_owned_url(value: &str, zone: &str) -> Result<()> {
+    for candidate in value.split(',') {
+        if let Ok(url) = url::Url::parse(candidate.trim())
+            && let Some(host) = url.host_str()
+        {
+            let host = host.trim_end_matches('.');
+            ensure!(
+                host != "fv.test" && !host.ends_with(".fv.test"),
+                "legacy .fv.test names must be replaced with one-level .fv names"
+            );
+            for root in ["fv", zone] {
+                if host == root || host.ends_with(&format!(".{root}")) {
+                    ensure!(
+                        host == root || direct_subdomain(host, root),
+                        "nested Founder Village URL host forbidden: {host}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
 fn https_endpoint(value: &str) -> bool {
     if value.chars().any(|c| c.is_control() || c.is_whitespace()) || value.contains('\\') {
         return false;
@@ -125,6 +154,30 @@ impl Config {
                 && self.api_domain != self.admin_domain,
             "invalid or overlapping domains"
         );
+        let zone = if self.environment == "local" {
+            "fv"
+        } else {
+            &self.cloudflare.zone_name
+        };
+        ensure!(
+            direct_subdomain(&self.api_domain, zone) && direct_subdomain(&self.admin_domain, zone),
+            "API and admin must be one-level subdomains of {zone}"
+        );
+        for endpoint in [
+            &self.auth.issuer,
+            &self.auth.jwks_url,
+            &self.auth.authorization_endpoint,
+            &self.auth.token_endpoint,
+            &self.backup.s3_endpoint,
+        ] {
+            validate_owned_url(endpoint, &self.cloudflare.zone_name)?;
+        }
+        for actor in &self.auth.root_actors {
+            validate_owned_url(
+                actor.split('|').next().unwrap_or(""),
+                &self.cloudflare.zone_name,
+            )?;
+        }
         let vpn: ipnet::Ipv4Net = self
             .wireguard_cidr
             .parse()
@@ -158,8 +211,8 @@ impl Config {
         );
         for name in &self.cloudflare.managed_names {
             ensure!(
-                domain(name) && name.ends_with(&format!(".{}", self.cloudflare.zone_name)),
-                "record outside managed zone"
+                direct_subdomain(name, &self.cloudflare.zone_name),
+                "managed DNS records must be one-level subdomains of the zone"
             );
         }
         if self.environment != "local" {
@@ -264,6 +317,48 @@ mod tests {
         assert!(!identifier("x; reboot"));
         assert!(!domain("a.example.com/"));
         assert!(domain("api.example.com"));
+    }
+    #[test]
+    fn founder_village_domains_are_exactly_one_level_deep() {
+        assert!(direct_subdomain("api.fv", "fv"));
+        assert!(direct_subdomain("api-dev.example.com", "example.com"));
+        for host in [
+            "fv",
+            "dev.api.fv",
+            "api.fv.test",
+            "*.fv",
+            "-api.fv",
+            "api..fv",
+        ] {
+            assert!(!direct_subdomain(host, "fv"), "accepted {host}");
+        }
+        let mut config: Config =
+            serde_json::from_str(include_str!("../../../config/local.json")).unwrap();
+        for host in ["dev.api.fv", "api.fv.test"] {
+            config.api_domain = host.into();
+            assert!(config.validate().is_err());
+        }
+        config.api_domain = "api.fv".into();
+        config.cloudflare.managed_names = vec!["api.dev.example.com".into()];
+        assert!(config.validate().is_err());
+        config.cloudflare.managed_names = vec!["api-dev.example.com".into()];
+        config.auth.issuer = "https://login.local.fv".into();
+        assert!(config.validate().is_err());
+        for invalid in [
+            "https://login.api.fv",
+            "https://files.dev.example.com/",
+            "https://local.fv.test",
+            "https://login.api.fv./",
+        ] {
+            assert!(validate_owned_url(invalid, "example.com").is_err());
+        }
+        assert!(
+            validate_owned_url(
+                "https://files.example.com,https://third.party.invalid/",
+                "example.com"
+            )
+            .is_ok()
+        );
     }
     #[test]
     fn projects_cannot_cross_local_boundary() {

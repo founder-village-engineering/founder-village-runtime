@@ -14,3 +14,6 @@ fv-host = { path = "../fv-host" }
 fv-ops = { path = "../fv-ops" }
 clap = { version = "4", features = ["derive"] }
 reqwest.workspace = true
+crossterm = "0.29"
+fs2 = "0.4"
+signal-hook = "0.3"

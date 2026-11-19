@@ -20,6 +20,7 @@ import {
 } from "../packages/queue/index.ts";
 import { migrate } from "../packages/database/migrate.ts";
 if (!local()) throw new Error("Integration fixtures are local-only");
+process.env.FV_LOCAL_AUTH_FIXTURES = "1";
 const db = pool(),
   control = pool("CONTROL_DATABASE_URL"),
   worker = pool("WORKER_DATABASE_URL"),

@@ -26,6 +26,28 @@ export type Identity = {
   subject: string;
   claims: Record<string, unknown>;
 };
+// Requesting acr_values is advisory in OIDC. Enforce the signed result too,
+// including recent authentication and the authorized party for ID tokens.
+export function adminAssurance(
+  claims: Record<string, unknown>,
+  clientId: string,
+) {
+  const now = Date.now() / 1000;
+  if (
+    !Array.isArray(claims.amr) ||
+    !claims.amr.includes("mfa") ||
+    claims.acr !== secret("OIDC_MFA_ACR") ||
+    typeof claims.auth_time !== "number" ||
+    !Number.isFinite(claims.auth_time) ||
+    now - claims.auth_time > 3600 ||
+    claims.auth_time - now > 5 ||
+    (claims.azp !== undefined && claims.azp !== clientId) ||
+    (Array.isArray(claims.aud) &&
+      claims.aud.length > 1 &&
+      claims.azp !== clientId)
+  )
+    denied(403);
+}
 export async function identity(
   token: string,
   admin = false,
@@ -56,12 +78,7 @@ export async function identity(
       clockTolerance: 5,
     });
     if (!payload.sub || payload.sub.length > 200) denied();
-    if (
-      admin &&
-      !local() &&
-      (!Array.isArray(payload.amr) || !payload.amr.includes("mfa"))
-    )
-      denied(403);
+    if (admin && !local()) adminAssurance(payload, audience);
     return {
       actor: `${issuer}|${payload.sub}`,
       subject: payload.sub,
@@ -109,8 +126,10 @@ export async function localToken(subject: string): Promise<string> {
     .sign(new TextEncoder().encode(secret("LOCAL_JWT_SECRET")));
 }
 export function sameOrigin(req: FastifyRequest) {
+  const origins = [secret("ADMIN_ORIGIN")];
+  if (local()) origins.push("http://127.0.0.1:43802");
   if (
-    req.headers.origin !== secret("ADMIN_ORIGIN") ||
+    !origins.includes(req.headers.origin ?? "") ||
     req.headers["sec-fetch-site"] === "cross-site"
   )
     denied(403);

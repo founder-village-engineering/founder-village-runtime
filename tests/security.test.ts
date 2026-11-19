@@ -6,8 +6,79 @@ import {
   recordInput,
   envelope,
 } from "../packages/contracts/index.ts";
-import { verifyWebhook, hash, equal } from "../packages/auth/index.ts";
+import {
+  verifyWebhook,
+  hash,
+  equal,
+  sameOrigin,
+  adminAssurance,
+} from "../packages/auth/index.ts";
+import type { FastifyRequest } from "fastify";
 import { server } from "../packages/observability/index.ts";
+
+test("red/blue: administrator ID tokens cannot downgrade assurance, reuse stale authentication or name another authorized party", (t) => {
+  const previous = process.env.OIDC_MFA_ACR;
+  t.after(() => {
+    if (previous === undefined) delete process.env.OIDC_MFA_ACR;
+    else process.env.OIDC_MFA_ACR = previous;
+  });
+  process.env.OIDC_MFA_ACR = "urn:synthetic:phishing-resistant";
+  const now = Date.now() / 1000;
+  const good = {
+    amr: ["mfa", "hwk"],
+    acr: "urn:synthetic:phishing-resistant",
+    auth_time: now,
+    aud: "admin-client",
+  };
+  assert.doesNotThrow(() => adminAssurance(good, "admin-client"));
+  for (const downgrade of [
+    { amr: ["pwd"] },
+    { acr: "urn:password-only" },
+    { acr: undefined },
+    { auth_time: undefined },
+    { auth_time: now - 3601 },
+    { auth_time: now + 60 },
+    { auth_time: NaN },
+    { azp: "another-client" },
+    { aud: ["admin-client", "another-client"] },
+  ])
+    assert.throws(() =>
+      adminAssurance({ ...good, ...downgrade }, "admin-client"),
+    );
+  assert.doesNotThrow(() =>
+    adminAssurance(
+      { ...good, aud: ["admin-client", "another-client"], azp: "admin-client" },
+      "admin-client",
+    ),
+  );
+});
+
+test("local HTTPS and loopback origins are explicit; sibling and nested sites cannot bypass CSRF", (t) => {
+  const previous = {
+    environment: process.env.FV_ENV,
+    origin: process.env.ADMIN_ORIGIN,
+  };
+  t.after(() => {
+    if (previous.environment === undefined) delete process.env.FV_ENV;
+    else process.env.FV_ENV = previous.environment;
+    if (previous.origin === undefined) delete process.env.ADMIN_ORIGIN;
+    else process.env.ADMIN_ORIGIN = previous.origin;
+  });
+  process.env.FV_ENV = "local";
+  process.env.ADMIN_ORIGIN = "https://admin.fv";
+  const request = (origin: string, site?: string) =>
+    ({ headers: { origin, "sec-fetch-site": site } }) as FastifyRequest;
+  for (const origin of ["https://admin.fv", "http://127.0.0.1:43802"])
+    assert.doesNotThrow(() => sameOrigin(request(origin)));
+  for (const origin of [
+    "https://api.fv",
+    "https://dev.admin.fv",
+    "https://admin.fv.evil.test",
+    "null",
+  ])
+    assert.throws(() => sameOrigin(request(origin)));
+  assert.throws(() => sameOrigin(request("https://admin.fv", "cross-site")));
+});
 
 test("HTTP assets are allowed only locally; remote environments retain HTTPS upgrades", async (t) => {
   const original = process.env.FV_ENV;

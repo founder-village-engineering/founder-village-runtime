@@ -1,15 +1,21 @@
 import { test, expect } from "@playwright/test";
+import { signIn } from "./sign-in.ts";
 test("named admin reviews namespaces, queues a durable operation, and signs out", async ({
   page,
 }, info) => {
-  await page.goto("/");
-  await expect(
-    page.getByRole("button", { name: /Open local console/ }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: /Open local console/ }).click();
+  await signIn(page);
   await expect(
     page.getByRole("heading", { name: "A clear view of everything." }),
   ).toBeVisible();
+  if (page.url().startsWith("https://")) {
+    const cookies = await page.context().cookies();
+    expect(cookies.find((cookie) => cookie.name === "fv_session")?.secure).toBe(
+      true,
+    );
+    expect(cookies.find((cookie) => cookie.name === "fv_csrf")?.secure).toBe(
+      true,
+    );
+  }
   await page.getByRole("button", { name: "Databases", exact: true }).click();
   for (const name of [
     "founder-village",
@@ -51,7 +57,7 @@ test("named admin reviews namespaces, queues a durable operation, and signs out"
   if (info.project.name === "desktop") {
     await page.getByRole("button", { name: "Sign out ↗" }).click();
     await expect(
-      page.getByRole("button", { name: /Open local console/ }),
+      page.getByRole("heading", { name: /Your village/ }),
     ).toBeVisible();
   }
 });

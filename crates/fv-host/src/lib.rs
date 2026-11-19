@@ -36,10 +36,18 @@ pub fn run(
 ) -> Result<()> {
     ensure!(timeout > 0, "positive operation timeout required");
     let mut command = Command::new(program);
+    command.args(args).current_dir(root).envs(env);
+    run_command(&mut command, timeout)
+}
+
+pub fn run_command(command: &mut Command, timeout: u64) -> Result<()> {
+    ensure!(timeout > 0, "positive operation timeout required");
+    let mut signals = signal_hook::iterator::Signals::new([
+        signal_hook::consts::SIGINT,
+        signal_hook::consts::SIGTERM,
+    ])?;
+    let program = command.get_program().to_string_lossy().into_owned();
     command
-        .args(args)
-        .current_dir(root)
-        .envs(env)
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::null());
@@ -51,6 +59,10 @@ pub fn run(
     let mut child = OperationChild(command.spawn()?);
     let start = Instant::now();
     loop {
+        ensure!(
+            signals.pending().next().is_none(),
+            "{program} operation interrupted"
+        );
         if let Some(status) = child.0.try_wait()? {
             ensure!(status.success(), "{program} operation failed");
             return Ok(());

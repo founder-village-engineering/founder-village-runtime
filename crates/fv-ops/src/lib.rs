@@ -1,5 +1,6 @@
 pub mod backup;
 pub mod deploy;
+pub mod local_edge;
 pub mod render;
 pub mod runner;
 pub mod wireguard;
@@ -11,6 +12,9 @@ pub fn env(root: &Path, c: &Config) -> Result<BTreeMap<String, String>> {
     fv_config::env_read(&root.join(format!(".state/{}.env", c.environment)))
 }
 pub fn compose(root: &Path, c: &Config, args: &[&str]) -> Result<()> {
+    fv_host::run_command(&mut compose_command(root, c, args), 3600)
+}
+pub fn compose_command(root: &Path, c: &Config, args: &[&str]) -> std::process::Command {
     let mut a = vec![
         "compose",
         "--project-directory",
@@ -25,7 +29,9 @@ pub fn compose(root: &Path, c: &Config, args: &[&str]) -> Result<()> {
         a.extend(["-f", &overlay]);
     }
     a.extend(args);
-    fv_host::run("docker", &a, root, &BTreeMap::new(), 3600)
+    let mut command = std::process::Command::new("docker");
+    command.args(a).current_dir(root);
+    command
 }
 pub fn lock(root: &Path, c: &Config) -> Result<fs::File> {
     fs::create_dir_all(root.join(".state"))?;

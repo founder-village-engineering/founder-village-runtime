@@ -8,3 +8,4 @@ fv-config = { path = "../fv-config" }
 serde_json.workspace = true
 
 reqwest.workspace = true
+signal-hook = "0.3"

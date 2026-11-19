@@ -10,11 +10,13 @@
     "services/admin-web"
   ],
   "scripts": {
+    "start": "bin/fv start",
     "build": "tsc -p tsconfig.json && npm run build -w services/admin-web",
     "typecheck": "tsc --noEmit && npm run typecheck -w services/admin-web",
     "test": "tsx --test tests/*.test.ts",
     "test:integration": "node --env-file=.state/local.env --import tsx tests/integration.ts",
     "test:browser": "playwright test",
+    "test:browser:https": "FV_BROWSER_LOCAL_HTTPS=1 playwright test",
     "check": "npm run typecheck && npm test && npm run build",
     "api": "tsx services/api/main.ts",
     "admin": "tsx services/admin-api/main.ts",
@@ -27,7 +29,8 @@
     "namespace:add": "node --import tsx scripts/onboard.ts",
     "hasura:generate": "node --import tsx scripts/generate-hasura.ts",
     "format:check": "prettier --check \"packages/**/*.ts\" \"services/**/*.{ts,tsx,css,html,json}\" \"scripts/**/*.ts\" \"tests/**/*.ts\" \"*.json\" \"config/*.json\" \"hasura/**/*.json\" \"policies/*.json\" \".github/**/*.yml\" playwright.config.ts",
-    "format": "prettier --write \"packages/**/*.ts\" \"services/**/*.{ts,tsx,css,html,json}\" \"scripts/**/*.ts\" \"tests/**/*.ts\" \"*.json\" \"config/*.json\" \"hasura/**/*.json\" \"policies/*.json\" \".github/**/*.yml\" playwright.config.ts"
+    "format": "prettier --write \"packages/**/*.ts\" \"services/**/*.{ts,tsx,css,html,json}\" \"scripts/**/*.ts\" \"tests/**/*.ts\" \"*.json\" \"config/*.json\" \"hasura/**/*.json\" \"policies/*.json\" \".github/**/*.yml\" playwright.config.ts",
+    "security:admin": "NODE_EXTRA_CA_CERTS=.state/local/edge/root.crt node --use-system-ca --env-file=.state/local.env --import tsx scripts/red-blue-admin.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1169.0",
@@ -43,7 +46,9 @@
     "amqplib": "2.4.0",
     "cf": "1.0.0-rc.0",
     "fastify": "5.12.8",
+    "graphql": "16.15.0",
     "jose": "6.2.17",
+    "libpg-query": "17.8.3",
     "pg": "8.23.1",
     "prom-client": "15.1.3",
     "zod": "4.6.7"

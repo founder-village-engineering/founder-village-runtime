@@ -143,6 +143,12 @@ pub fn init(root: &Path, c: &Config) -> Result<()> {
 }
 pub fn render(root: &Path, c: &Config) -> Result<()> {
     let mut e = super::env(root, c)?;
+    if c.environment == "local" {
+        e.insert("ADMIN_ORIGIN".into(), format!("https://{}", c.admin_domain));
+        e.insert("API_ORIGIN".into(), format!("https://{}", c.api_domain));
+        e.insert("OIDC_ISSUER".into(), c.auth.issuer.clone());
+        e.insert("OIDC_AUDIENCE".into(), c.auth.audience.clone());
+    }
     let external = root.join(format!("secrets/{}.env", c.environment));
     if external.exists() {
         ensure!(
@@ -170,6 +176,13 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
             e.insert(key, value);
         }
     }
+    // DNS ownership and naming policy come from the validated manifest, even
+    // when a secret catalog also contains CF_* settings.
+    e.insert("CF_ZONE_NAME".into(), c.cloudflare.zone_name.clone());
+    e.insert(
+        "CF_MANAGED_NAMES".into(),
+        c.cloudflare.managed_names.join(","),
+    );
     let dir = root.join(format!(".state/{}", c.environment));
     let images = super::validate_images(root)?;
     for name in [
@@ -227,6 +240,9 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
             );
             let role = format!("{role_prefix}_{kind}");
             sql.push_str(&format!("DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='{role}') THEN CREATE ROLE {role} LOGIN PASSWORD '{password}'; END IF; END $$;\n"));
+            if kind == "hasura" {
+                sql.push_str(&format!("ALTER ROLE {role} SET statement_timeout='10s';\n"));
+            }
             if let Some(group) = group {
                 sql.push_str(&format!("GRANT {group} TO {role};\n"));
             }
@@ -341,6 +357,9 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
     generated.insert("HASURA_JWT_CONFIG".into(), jwt.to_string());
     for (key, val) in images {
         generated.insert(format!("{}_IMAGE", key.to_uppercase()), val);
+    }
+    for value in generated.values() {
+        fv_config::validate_owned_url(value, &c.cloudflare.zone_name)?;
     }
     private_write(
         &root.join(format!(".state/{}.env", c.environment)),

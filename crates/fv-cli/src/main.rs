@@ -2,18 +2,44 @@ use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 use fv_config::private_write;
 use std::{collections::BTreeMap, fs, path::PathBuf};
+mod local;
+mod start;
+mod up;
 #[derive(Parser)]
 #[command(version, about = "Founder Village runtime control")]
 struct Args {
-    #[arg(long, default_value = ".")]
+    #[arg(long, global = true, default_value = ".")]
     root: PathBuf,
-    #[arg(long, default_value = "config/local.json")]
+    #[arg(long, global = true, default_value = "config/local.json")]
     config: PathBuf,
     #[command(subcommand)]
     command: Cmd,
 }
 #[derive(Subcommand)]
 enum Cmd {
+    /// Open the interactive runtime menu (or run a named shortcut).
+    Start {
+        #[arg(value_enum)]
+        action: Option<start::Action>,
+        /// List shortcuts without executing anything; also used without a TTY.
+        #[arg(long, conflicts_with = "action")]
+        list: bool,
+    },
+    /// Manage the isolated local *.fv DNS and HTTPS edge.
+    LocalEdge {
+        #[arg(value_parser = ["plan", "setup", "up", "doctor", "down", "host-install"])]
+        action: String,
+    },
+    /// Issue a five-minute, single-use local administrator sign-in link.
+    AdminLogin {
+        #[arg(long)]
+        open: bool,
+    },
+    /// Run one fixed local service with its scoped environment.
+    Dev {
+        #[arg(value_parser = ["api", "admin", "workers", "domain-worker", "monitor"])]
+        service: String,
+    },
     Init,
     Validate,
     Render,
@@ -82,18 +108,48 @@ fn main() {
 fn execute() -> Result<()> {
     let a = Args::parse();
     let root = a.root.canonicalize()?;
+    if let Cmd::Start { action, list } = a.command {
+        return start::run(&root, &a.config, action, list);
+    }
     let c = fv_config::load(&root.join(&a.config))?;
     if matches!(a.command, Cmd::Validate) {
         fv_ops::validate_images(&root)?;
+        if c.environment == "local" {
+            fv_ops::local_edge::routes(&root, &c)?;
+        }
         println!("configuration valid");
         return Ok(());
     }
-    let _lock = if matches!(a.command, Cmd::Ops { .. }) {
+    let _lock = if matches!(
+        a.command,
+        Cmd::Ops { .. } | Cmd::LocalEdge { .. } | Cmd::Dev { .. }
+    ) {
         None
     } else {
         Some(fv_ops::lock(&root, &c)?)
     };
     match a.command {
+        Cmd::Start { .. } => unreachable!(),
+        Cmd::Dev { service } => local::run_service(&root, &c, &service)?,
+        Cmd::AdminLogin { open } => {
+            ensure!(
+                c.environment == "local",
+                "remote administrators require OIDC MFA"
+            );
+            let mut args = vec!["--import", "tsx", "scripts/admin-login.ts"];
+            if open {
+                args.push("--open");
+            }
+            fv_host::run("node", &args, &root, &fv_ops::env(&root, &c)?, 30)?;
+        }
+        Cmd::LocalEdge { action } => match action.as_str() {
+            "plan" => fv_ops::local_edge::plan(&root, &c)?,
+            "up" => fv_ops::local_edge::up(&root, &c)?,
+            "setup" => fv_ops::local_edge::setup(&root, &c)?,
+            "doctor" => fv_ops::local_edge::doctor(&root, &c)?,
+            "host-install" => fv_ops::local_edge::host_install(&root, &c)?,
+            _ => fv_ops::local_edge::down(&root, &c)?,
+        },
         Cmd::Validate => {}
         Cmd::Init => {
             fv_ops::render::init(&root, &c)?;
@@ -104,58 +160,7 @@ fn execute() -> Result<()> {
             println!("runtime configuration rendered");
         }
         Cmd::Up => {
-            fv_ops::render::init(&root, &c)?;
-            fv_ops::compose(
-                &root,
-                &c,
-                &["up", "-d", "--build", "--wait", "postgres", "rabbitmq"],
-            )?;
-            fv_ops::compose(
-                &root,
-                &c,
-                &[
-                    "exec",
-                    "-T",
-                    "postgres",
-                    "psql",
-                    "-U",
-                    "postgres",
-                    "-v",
-                    "ON_ERROR_STOP=1",
-                    "-q",
-                    "-f",
-                    "/run/fv/init.sql",
-                ],
-            )?;
-            fv_ops::compose(
-                &root,
-                &c,
-                &[
-                    "exec",
-                    "-T",
-                    "rabbitmq",
-                    "sh",
-                    "-ceu",
-                    "cp /run/fv/definitions.json /etc/rabbitmq/definitions.json; chown rabbitmq:rabbitmq /etc/rabbitmq/definitions.json; chmod 600 /etc/rabbitmq/definitions.json; rabbitmqctl import_definitions /etc/rabbitmq/definitions.json",
-                ],
-            )?;
-            fv_ops::compose(&root, &c, &["up", "-d", "--wait", "hasura"])?;
-            let env = fv_ops::env(&root, &c)?;
-            for args in [
-                vec!["--import", "tsx", "packages/database/migrate.ts"],
-                vec!["--import", "tsx", "scripts/hasura.ts"],
-            ] {
-                fv_host::run("node", &args, &root, &env, 120)?;
-            }
-            if c.environment == "local" {
-                fv_host::run(
-                    "node",
-                    &["--import", "tsx", "scripts/seed.ts"],
-                    &root,
-                    &env,
-                    60,
-                )?;
-            }
+            up::run(&root, &c, fv_host::run_command)?;
             println!(
                 "data stack ready; start application services with bin/dev or deploy a signed release"
             );
@@ -280,13 +285,16 @@ fn execute() -> Result<()> {
                 serde_json::to_string_pretty(&fv_ops::wireguard::peers(&root, &c)?)?
             ),
         },
-        Cmd::Ops { once } => loop {
-            fv_ops::runner::tick(&root, &c)?;
-            if once {
-                break;
+        Cmd::Ops { once } => {
+            let interrupt = local::Interrupt::new()?;
+            while !interrupt.stopped() {
+                fv_ops::runner::tick(&root, &c)?;
+                if once {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
             }
-            std::thread::sleep(std::time::Duration::from_secs(3));
-        },
+        }
         Cmd::AdminGrant {
             actor,
             actions,

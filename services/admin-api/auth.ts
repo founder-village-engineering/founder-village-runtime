@@ -17,6 +17,7 @@ import {
   equal,
 } from "../../packages/auth/index.ts";
 import { audit, secret, transaction } from "../../packages/database/index.ts";
+import { applications } from "../../packages/database/applications.ts";
 const resolvedActors = new WeakMap<FastifyRequest, string>();
 export const requestActor = (req: FastifyRequest) =>
   resolvedActors.get(req) ?? "unknown";
@@ -68,6 +69,7 @@ export async function authRoutes(app: FastifyInstance, db: pg.Pool) {
     actor: string,
     reply: FastifyReply,
     previous?: string,
+    secure = !local(),
   ) {
     const token = randomToken(),
       csrf = randomToken();
@@ -90,14 +92,14 @@ export async function authRoutes(app: FastifyInstance, db: pg.Pool) {
     reply.setCookie("fv_session", token, {
       path: "/",
       httpOnly: true,
-      secure: !local(),
+      secure,
       sameSite: "strict",
       maxAge: 3600,
     });
     reply.setCookie("fv_csrf", csrf, {
       path: "/",
       httpOnly: false,
-      secure: !local(),
+      secure,
       sameSite: "strict",
       maxAge: 3600,
     });
@@ -106,17 +108,66 @@ export async function authRoutes(app: FastifyInstance, db: pg.Pool) {
     await accessGate(req);
     return {
       local: local(),
+      fixtureLogin: local() && process.env.FV_LOCAL_AUTH_FIXTURES === "1",
       authenticated: !!(await currentSession(db, req.cookies.fv_session)),
     };
   });
-  app.post("/auth/local", async (req, reply) => {
-    if (!local() || !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.ip))
-      denied(403);
-    sameOrigin(req);
-    const who = await identity(await localToken("owner"), true);
-    await session(who.actor, reply, req.cookies.fv_session);
-    return { status: "signed_in" };
-  });
+  app.post(
+    "/auth/local",
+    { config: { rateLimit: { max: 20, timeWindow: 60000 } } },
+    async (req, reply) => {
+      if (
+        !local() ||
+        !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.ip)
+      )
+        denied(403);
+      sameOrigin(req);
+      let actor: string;
+      if (process.env.FV_LOCAL_AUTH_FIXTURES === "1") {
+        actor = (await identity(await localToken("owner"), true)).actor;
+      } else {
+        const code = (req.body as { code?: unknown } | undefined)?.code;
+        if (typeof code !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(code))
+          denied();
+        actor = await transaction(db, async (c) => {
+          const result = await c.query<{
+            actor: string;
+            actions: string[];
+            applications: string[];
+          }>(
+            "DELETE FROM control.local_admin_codes code USING control.administrators a WHERE code.token_hash=$1 AND code.expires_at>now() AND a.actor=code.actor AND a.enabled RETURNING code.actor,a.actions,a.applications",
+            [hash(code)],
+          );
+          const row = result.rows[0];
+          const roots = z
+            .array(z.string())
+            .parse(JSON.parse(secret("ROOT_ADMIN_ACTORS")));
+          if (
+            !row ||
+            !roots.includes(row.actor) ||
+            !row.actions.includes("admins.manage") ||
+            !applications.every((a) => row.applications.includes(a.id))
+          )
+            denied();
+          await audit(
+            c,
+            row.actor,
+            "session.code.consume",
+            "local-admin",
+            "consumed",
+          );
+          return row.actor;
+        });
+      }
+      await session(
+        actor,
+        reply,
+        req.cookies.fv_session,
+        req.headers.origin?.startsWith("https://"),
+      );
+      return { status: "signed_in" };
+    },
+  );
   app.get("/auth/login", async (req, reply) => {
     await accessGate(req);
     if (local()) return reply.redirect("/");
@@ -145,6 +196,7 @@ export async function authRoutes(app: FastifyInstance, db: pg.Pool) {
       code_challenge: createHash("sha256").update(verifier).digest("base64url"),
       code_challenge_method: "S256",
       acr_values: secret("OIDC_MFA_ACR"),
+      max_age: "3600",
     }).toString();
     return reply.redirect(url.href);
   });

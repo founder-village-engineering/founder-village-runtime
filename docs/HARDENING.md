@@ -2,6 +2,14 @@
 
 Review date: 2026-11-17. Scope: application API, administrator console, PostgreSQL/Hasura boundaries, broker workers, privileged operations, host execution, configuration, deployment and recovery. Existing unrelated staged and unstaged work is preserved. No production deployment or provider mutation is part of this review.
 
+## Administrator red/blue follow-up
+
+The authenticated local HTTPS admin and embedded Hasura follow-up passed 36 live adversarial checks. Local credential-free login was replaced with five-minute, single-use CLI credentials. Hasura's standalone hostnames were removed; root identity, full current grants and CSRF checks protect the embedded console and every asset. PostgreSQL syntax-tree validation rejects transaction escapes and hidden writes before forwarding, in addition to read-only transactions and database permissions. Background workers cannot mint login codes. Remote administrator ID tokens now enforce the configured assurance level, recent authentication and authorized party.
+
+`npm run check` passed with 35 unit/regression tests and the build. The real PostgreSQL/Hasura/RabbitMQ integration suite passed with the competing local worker briefly paused; the same worker was resumed and its readiness verified. All nine canonical HTTPS browser scenarios passed across desktop Chromium, mobile Chromium and mobile WebKit, including table browsing and source switching. Rust formatting, workspace Clippy, four focused CLI tests, source scanning and formatting passed. DNS/TLS and application health passed for every registered `.fv` route.
+
+The production npm audit reported zero vulnerabilities; the full audit retains five development dependency entries from one unpatched picomatch advisory. Live identity-provider MFA/Access behavior, deployed ingress and recovery remain separate evidence. See the [repeatable administrator exercise](runbooks/ADMIN_SECURITY.md), `.state/evidence/admin-red-blue.json`, and `.state/qa/hasura-*.png`. These are automated local exercises, not an independent penetration test. Earlier verification counts below describe the preceding hardening pass.
+
 ## Findings and implementation
 
 | Priority | Finding | Remediation and verification |
