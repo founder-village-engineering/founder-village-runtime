@@ -52,7 +52,7 @@ jobs:
           docker push "$tag"
           docker image inspect --format '{{index .RepoDigests 0}}' "$tag" > platform-image.txt
           install -m 0755 target/release/fv fv
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-${{ matrix.arch }}
           path: |
@@ -105,12 +105,12 @@ jobs:
             cp source.tar source.sigstore.json source-manifest.json source-manifest.sigstore.json image-digest.txt "$bundle/"
             cosign sign-blob --yes --bundle "$bundle/fv.sigstore.json" "$bundle/fv"
           done
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: fv-linux-amd64-${{ github.sha }}
           path: "${{ runner.temp }}/fv-release/amd64/*"
           if-no-files-found: error
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: fv-linux-arm64-${{ github.sha }}
           path: "${{ runner.temp }}/fv-release/arm64/*"
