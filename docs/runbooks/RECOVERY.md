@@ -22,6 +22,8 @@ The five-minute database target concerns the active offsite WAL repository. An i
 
 Remote capture additionally builds an age-encrypted configuration/secret bundle and runs independently credentialed immutable replication. Objects are streamed through a bounded temporary file, SHA-256 checked at the destination, version recorded, and retained in compliance mode. The chosen S3 provider must support the required operations; incompatibility fails the operation. Local-copy receipts never claim offsite or immutable-copy proof.
 
+Remote `backup verify` also requires completion of the immutable copy for the exact authenticated backup receipt. A partial replication blocks promotion until a completed capture passes verification.
+
 Recovery bundles contain an authenticated exact artifact set. Verification rejects extras, omissions, altered sizes/checksums, duplicate names, symlinks, and unsafe names. Preserve the backup-HMAC verification key independently of the backup repository, along with the age private identity. The recipient alone does not authenticate the sender.
 
 On a replacement host with the matching signed source:
@@ -31,7 +33,7 @@ node --import tsx scripts/verify-recovery.ts /protected/recovery-bundle
 node --import tsx scripts/restore-secrets.ts production /protected/recovery-bundle /offline/age-identity
 ```
 
-Provide `BACKUP_HMAC_KEY_FILE` from independent custody. Secrets are decrypted and validated before replacing any current catalog; the previous catalog is preserved. Restore the encrypted WireGuard server key and peer inventory through the same verified artifact procedure before applying the interface.
+Provide `BACKUP_HMAC_KEY_FILE` from independent custody. Secrets are decrypted and validated before replacing any current catalog. The previous catalog is preserved. For a WireGuard deployment, restore the encrypted server key and peer inventory through the verified artifact procedure before applying the interface. For a Tunnel SSH deployment, recover or rotate the connector credential and verify Access, host keys, and the public-inbound firewall proof before reopening traffic.
 
 For a real disaster:
 

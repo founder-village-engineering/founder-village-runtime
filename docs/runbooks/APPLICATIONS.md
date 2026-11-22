@@ -63,7 +63,17 @@ bin/fv admin-grant --actor '<verified-issuer>|<subject>' --actions dashboard.rea
 
 Production use also needs the configured MFA/Access identity. Cluster-wide backup/deploy/network operations require grants covering the complete application inventory. Adding an application does not silently expand existing grants. Revocation is checked for every request and again before execution.
 
-For WireGuard, prefer client-generated keys and `wireguard enroll` with the public key. An optional local profile generator writes a private file and never activates workstation routes:
+## WireGuard
+
+Generate the client key on the operator device and transfer its public key through the operator channel. On the VM, enroll that public key with an unused address in `wireguard_cidr` and a future expiry. Apply the interface and read the server's public key.
+
+```sh
+sudo bin/fv --config "$manifest" wireguard enroll --name laptop --public-key "$(cat /protected/laptop.pub)" --address 10.89.0.2 --expires 2027-02-01
+sudo bin/fv --config "$manifest" wireguard apply
+sudo wg show wg-fv public-key
+```
+
+Set the device endpoint to the pinned VM address and WireGuard port. Use the gateway's single `/32` in `AllowedIPs`, normally `10.89.0.1/32` with the example CIDR. Keep the device private key on that device. An optional local profile generator writes a private file and leaves workstation routes alone.
 
 ```sh
 node --import tsx scripts/wireguard-profile.ts laptop 10.89.0.2 vpn.example.com:51827 2027-02-01 config/local.json

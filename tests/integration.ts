@@ -19,6 +19,8 @@ import {
   queueName,
 } from "../packages/queue/index.ts";
 import { migrate } from "../packages/database/migrate.ts";
+import { applicationId as membersApplicationId } from "../packages/frontend-contracts/founder-village-members/index.ts";
+import { exerciseMembers } from "./members-integration.ts";
 if (!local()) throw new Error("Integration fixtures are local-only");
 process.env.FV_LOCAL_AUTH_FIXTURES = "1";
 const db = pool(),
@@ -39,6 +41,10 @@ try {
   await migrate(migration, "app");
   await migrate(cm, "control");
   proof.push("migrations repeat without drift");
+  await exerciseMembers(namespaces[membersApplicationId]!);
+  proof.push(
+    "member signup, contact consent, ownership, checkout replay, verified Stripe/SOL/USDC settlement, and deletion",
+  );
   assert.equal((await app.inject({ url: "/records" })).statusCode, 401);
   assert.equal(
     (

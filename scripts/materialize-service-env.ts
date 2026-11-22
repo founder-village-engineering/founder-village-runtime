@@ -17,6 +17,7 @@ export function scopedServiceEnvironments(vars: Record<string, string>) {
     "CF_ZONE_ID",
     "CF_ZONE_NAME",
     "CF_MANAGED_NAMES",
+    "CF_TUNNEL_NAMES",
     "CF_READ_TOKEN",
     "CF_WRITE_TOKEN",
     "AUDIT_HMAC_KEY",

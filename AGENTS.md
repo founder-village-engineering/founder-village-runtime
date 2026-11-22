@@ -6,6 +6,7 @@
 > Use placeholders and approved secret stores, inspect staged changes before every commit, and
 > immediately rotate anything that may have been exposed.
 
+- Use the [public repository security skill](.agents/skills/public-repo-security/SKILL.md) and pass `npm run security:scan -- --staged` before committing.
 - Author application and automation code in TypeScript (`.ts`/`.tsx`) and host/runtime control code in Rust. Do not create JavaScript or MJS source files. TypeScript source imports use `.ts`; compiler/browser output stays ignored.
 - `config/applications.json` is the namespace registry. Preserve the exact PostgreSQL and Hasura source names: `founder-village`, `founder-farm`, `founder-cafe`, and `founder-residences`. Application selection must not replace server-side membership checks.
 - Never copy Archlife secrets, production data, deployment state, or application-specific behavior. Preserve unrelated worktrees and running services.

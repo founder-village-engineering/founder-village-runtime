@@ -99,9 +99,12 @@ Select `founder-cafe` in the application header and use a cafe membership. A vil
 
 ## Verification
 
+Install [Gitleaks](https://github.com/gitleaks/gitleaks#getting-started) for the secret scans. In a checkout without custom Git hooks, enable the tracked pre-commit hook with `git config --local core.hooksPath .githooks`. If you already use a pre-commit hook, add `node scripts/security-scan.ts --staged` to it. See the [public repository security skill](.agents/skills/public-repo-security/SKILL.md) for review and incident steps.
+
 ```sh
 npm run check
 npm run security:scan
+npm run security:scan -- --history
 npm run security:admin  # local HTTPS red/blue exercise; runtime must be running
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -119,6 +122,8 @@ bin/fv backup restore-drill
 `npm run release:verify` is the explicit expanded verification workflow. Routine deployment does not invoke this whole collection automatically. See [implementation status](IMPLEMENTATION.md) for executed evidence and live prerequisites.
 
 ## Operations and production
+
+The existing-VM workflow targets a Helsinki CAX11 on Ubuntu 24.04 ARM64. Tagged releases produce one signed AMD64/ARM64 image index and separate native CLI bundles. The provisioning runbook covers VM binding, Cloudflare Tunnel for API, admin, and operator SSH, verified firewall lockdown, backups, and first promotion.
 
 - [Architecture and decisions](docs/adr/0001-runtime.md)
 - [Security boundaries](docs/SECURITY.md)

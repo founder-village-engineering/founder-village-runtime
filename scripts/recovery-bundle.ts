@@ -51,41 +51,39 @@ for (const input of inputs) {
     flag: "wx",
   });
 }
-try {
-  if (!(await lstat(`.state/${env}/wireguard.key`)).isFile())
-    throw new Error("unsafe WireGuard key");
-  await exec(
-    "age",
-    [
-      "-r",
-      recipient,
-      "-o",
-      `${dir}/wireguard.key.age`,
-      `.state/${env}/wireguard.key`,
-    ],
-    { timeout: 30000 },
-  );
-} catch (e) {
-  if (env !== "local" || (e as NodeJS.ErrnoException).code !== "ENOENT")
-    throw e;
-}
-try {
-  if (!(await lstat(`.state/${env}/peers.json`)).isFile())
-    throw new Error("unsafe WireGuard peer catalog");
-  await exec(
-    "age",
-    [
-      "-r",
-      recipient,
-      "-o",
-      `${dir}/wireguard-peers.json.age`,
-      `.state/${env}/peers.json`,
-    ],
-    { timeout: 30000 },
-  );
-} catch (e) {
-  if (env !== "local" || (e as NodeJS.ErrnoException).code !== "ENOENT")
-    throw e;
+const runtime = JSON.parse(await readFile(`${dir}/runtime.json`, "utf8")) as {
+  cloudflare?: { ssh_domain?: string };
+};
+const wireguard = [
+  ["wireguard.key", "wireguard.key.age"],
+  ["peers.json", "wireguard-peers.json.age"],
+] as const;
+const present = await Promise.all(
+  wireguard.map(async ([source]) => {
+    const stat = await lstat(`.state/${env}/${source}`).catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+        return undefined;
+      },
+    );
+    if (stat && !stat.isFile())
+      throw new Error("unsafe WireGuard recovery input");
+    return !!stat;
+  }),
+);
+if (
+  env !== "local" &&
+  (present.some(Boolean) || !runtime.cloudflare?.ssh_domain) &&
+  !present.every(Boolean)
+)
+  throw new Error("incomplete WireGuard key and peer inventory");
+for (const [index, [source, name]] of wireguard.entries()) {
+  if (present[index])
+    await exec(
+      "age",
+      ["-r", recipient, "-o", `${dir}/${name}`, `.state/${env}/${source}`],
+      { timeout: 30000 },
+    );
 }
 const { readdir } = await import("node:fs/promises");
 const artifacts = [];

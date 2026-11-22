@@ -28,5 +28,11 @@
     "database": "founders",
     "hasuraSource": "founders",
     "owner": "Founder Village Founders"
+  },
+  {
+    "id": "founder-village-members",
+    "database": "founder-village-members",
+    "hasuraSource": "founder-village-members",
+    "owner": "Founder Village"
   }
 ]

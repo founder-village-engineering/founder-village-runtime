@@ -8,8 +8,9 @@
   "wireguard_port": 51827,
   "provider": {
     "name": "hetzner",
-    "location": "ash",
-    "server_type": "cpx22",
+    "location": "hel1",
+    "server_type": "cax11",
+    "architecture": "arm64",
     "image": "ubuntu-24.04",
     "ssh_key_ids": []
   },
@@ -17,10 +18,16 @@
     "account_id": "",
     "zone_id": "",
     "zone_name": "example.com",
-    "managed_names": ["canary.example.com"],
+    "managed_names": [
+      "api.example.com",
+      "admin.example.com",
+      "ssh.example.com",
+      "canary.example.com"
+    ],
     "access_team": "",
     "access_aud": "",
-    "cf_binary": "/usr/local/bin/cf",
+    "ssh_domain": "ssh.example.com",
+    "cf_binary": "/opt/founder-village/node_modules/cf/bin/cf",
     "cf_sha256": ""
   },
   "backup": {

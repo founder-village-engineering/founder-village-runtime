@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use fv_config::Config;
 use std::{path::Path, process::Command};
 
@@ -9,6 +9,13 @@ pub fn run(
     c: &Config,
     mut execute: impl FnMut(&mut Command, u64) -> Result<()>,
 ) -> Result<()> {
+    if c.environment != "local" {
+        fv_host::assert_platform(c)?;
+        ensure!(
+            fv_host::docker_architecture()? == c.provider.architecture,
+            "Docker architecture mismatch"
+        );
+    }
     fv_ops::render::init(root, c)?;
     for args in [
         vec!["up", "-d", "--build", "--wait", "postgres", "rabbitmq"],
@@ -49,6 +56,9 @@ pub fn run(
                 .envs(&env),
             120,
         )?;
+    }
+    if c.environment != "local" {
+        fv_ops::deploy::resume(root, c)?;
     }
     Ok(())
 }

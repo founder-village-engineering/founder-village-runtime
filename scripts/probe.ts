@@ -7,6 +7,20 @@ const response = await fetch(new URL("/health/ready", endpoint), {
   redirect: "error",
 });
 if (!response.ok) throw new Error("external_readiness_failed");
+const revision = process.env.PUBLIC_API_REVISION;
+if (revision) {
+  if (!/^[a-f0-9]{40}$/.test(revision))
+    throw new Error("exact public source revision required");
+  const live = await fetch(new URL("/health/live", endpoint), {
+    signal: AbortSignal.timeout(10000),
+    redirect: "error",
+  });
+  if (
+    !live.ok ||
+    ((await live.json()) as { revision?: string }).revision !== revision
+  )
+    throw new Error("external_revision_mismatch");
+}
 await new Promise<void>((resolve, reject) => {
   const socket = connect(
     {
@@ -33,5 +47,6 @@ console.log(
   JSON.stringify({
     event: "external_probe.passed",
     timestamp: new Date().toISOString(),
+    ...(revision ? { revision } : {}),
   }),
 );

@@ -3,6 +3,12 @@ node_modules
 **/node_modules
 target
 .state
+**/.state
 secrets
+**/*.private.json
+**/secrets
+.cache
 **/dist
 .env*
+**/.env*
+**/.dev.vars*

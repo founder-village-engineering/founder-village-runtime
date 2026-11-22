@@ -1,5 +1,5 @@
 use anyhow::{Result, ensure};
-use fv_config::Config;
+use fv_config::{Architecture, Config};
 use std::{
     collections::BTreeMap,
     path::Path,
@@ -85,18 +85,113 @@ pub fn cloud_init(c: &Config, ssh_keys: &[String]) -> Result<String> {
         .iter()
         .map(|k| serde_json::to_string(k).map(|quoted| format!("      - {quoted}\n")))
         .collect::<std::result::Result<String, _>>()?;
+    let wireguard_rule = if c.cloudflare.ssh_domain.is_none() {
+        format!("  - [ufw, allow, {}/udp]\n", c.wireguard_port)
+    } else {
+        String::new()
+    };
     Ok(format!(
-        "#cloud-config\npackage_update: true\npackage_upgrade: true\npackages: [ca-certificates, curl, ufw, wireguard, age, jq, xz-utils, unattended-upgrades, openssh-server]\nusers:\n  - name: fv\n    groups: [sudo]\n    shell: /bin/bash\n    sudo: ['ALL=(ALL) NOPASSWD:ALL']\n    ssh_authorized_keys:\n{keys}ssh_pwauth: false\ndisable_root: true\nwrite_files:\n  - path: /etc/ssh/sshd_config.d/90-fv.conf\n    permissions: '0600'\n    content: |\n      PasswordAuthentication no\n      PermitRootLogin no\n      KbdInteractiveAuthentication no\n      X11Forwarding no\n      AllowUsers fv\nruncmd:\n  - [ufw, default, deny, incoming]\n  - [ufw, default, allow, outgoing]\n{}  - [ufw, allow, {}/udp]\n  - [ufw, --force, enable]\n  - [systemctl, enable, --now, systemd-timesyncd]\n  - [systemctl, restart, ssh]\n",
+        "#cloud-config\npackage_update: true\npackage_upgrade: true\npackages: [ca-certificates, curl, ufw, wireguard, age, jq, xz-utils, unattended-upgrades, openssh-server]\nusers:\n  - name: fv\n    groups: [sudo]\n    shell: /bin/bash\n    sudo: ['ALL=(ALL) NOPASSWD:ALL']\n    ssh_authorized_keys:\n{keys}ssh_pwauth: false\ndisable_root: true\nwrite_files:\n  - path: /etc/ssh/sshd_config.d/90-fv.conf\n    permissions: '0600'\n    content: |\n      PasswordAuthentication no\n      PermitRootLogin no\n      KbdInteractiveAuthentication no\n      X11Forwarding no\n      AllowUsers fv\nruncmd:\n  - [ufw, default, deny, incoming]\n  - [ufw, default, allow, outgoing]\n{}{wireguard_rule}  - [ufw, --force, enable]\n  - [systemctl, enable, --now, systemd-timesyncd]\n  - [systemctl, restart, ssh]\n",
         c.ssh_cidrs
             .iter()
             .map(|ip| format!("  - [ufw, allow, from, '{ip}', to, any, port, '22', proto, tcp]\n"))
-            .collect::<String>(),
-        c.wireguard_port
+            .collect::<String>()
     ))
 }
 
+pub fn assert_platform(c: &Config) -> Result<()> {
+    ensure!(
+        c.environment != "local",
+        "host convergence requires a remote manifest"
+    );
+    ensure!(
+        std::env::consts::OS == "linux",
+        "remote runtime requires Linux"
+    );
+    ensure!(
+        Architecture::from_machine(std::env::consts::ARCH)? == c.provider.architecture,
+        "installed CLI architecture does not match the configured Linux platform"
+    );
+    let os = std::fs::read_to_string("/etc/os-release")?;
+    ensure!(
+        os.lines().any(|line| line == "ID=ubuntu")
+            && os.lines().any(|line| line == "VERSION_CODENAME=noble"),
+        "remote runtime requires Ubuntu 24.04 LTS"
+    );
+    let machine = Command::new("uname").arg("-m").output()?;
+    ensure!(
+        machine.status.success()
+            && Architecture::from_machine(std::str::from_utf8(&machine.stdout)?.trim())?
+                == c.provider.architecture,
+        "host architecture does not match the configured Linux platform"
+    );
+    Ok(())
+}
+
+pub fn verify_tunnel_ssh(
+    root: &Path,
+    host: &str,
+    known_hosts: &Path,
+    identity: Option<&Path>,
+) -> Result<()> {
+    ensure!(fv_config::domain(host), "invalid tunnel SSH hostname");
+    let known_hosts = known_hosts.canonicalize()?;
+    let file = known_hosts
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("invalid known_hosts path"))?;
+    ensure!(
+        known_hosts.is_file() && !file.chars().any(|ch| ch == '%' || ch.is_control()),
+        "use a dedicated known_hosts file"
+    );
+    let file = file.replace('\\', "\\\\").replace('"', "\\\"");
+    let mut command = Command::new("ssh");
+    command.current_dir(root).args([
+        "-F",
+        "/dev/null",
+        "-T",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        &format!("UserKnownHostsFile=\"{file}\""),
+        "-o",
+        "GlobalKnownHostsFile=none",
+        "-o",
+        "HostKeyAlgorithms=ssh-ed25519",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ClearAllForwardings=yes",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "ForwardAgent=no",
+        "-o",
+        "ConnectTimeout=15",
+        "-o",
+        "ProxyCommand=cloudflared access ssh --hostname %h",
+    ]);
+    if let Some(identity) = identity {
+        command.arg("-i").arg(identity.canonicalize()?);
+    }
+    command.args(["-l", "fv", host, "sudo -n true"]);
+    run_command(&mut command, 45).map_err(|_| {
+        anyhow::anyhow!("Cloudflare SSH verification failed; firewall was not changed")
+    })
+}
+
+pub fn docker_architecture() -> Result<Architecture> {
+    let result = Command::new("docker")
+        .args(["info", "--format", "{{.OSType}}/{{.Architecture}}"])
+        .output()?;
+    ensure!(result.status.success(), "Docker daemon unavailable");
+    let platform = std::str::from_utf8(&result.stdout)?.trim();
+    let machine = platform
+        .strip_prefix("linux/")
+        .ok_or_else(|| anyhow::anyhow!("Linux Docker daemon required"))?;
+    Architecture::from_machine(machine)
+}
+
 pub fn install_tools(root: &Path) -> Result<()> {
-    use std::io::Read;
     ensure!(std::env::consts::OS == "linux", "Linux host required");
     let lock: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("config/tools.lock.json"))?)?;
@@ -109,8 +204,18 @@ pub fn install_tools(root: &Path) -> Result<()> {
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("missing Node version"))?;
     let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(120))
+        .timeout(Duration::from_secs(300))
         .build()?;
+    if !Path::new("/usr/bin/xz").exists() {
+        run("apt-get", &["update", "-qq"], root, &BTreeMap::new(), 120)?;
+        run(
+            "apt-get",
+            &["install", "-y", "--no-install-recommends", "xz-utils"],
+            root,
+            &BTreeMap::new(),
+            120,
+        )?;
+    }
     let dir = root.join(".state/downloads");
     std::fs::create_dir_all(&dir)?;
     for (url, expected, file, executable) in [
@@ -134,16 +239,12 @@ pub fn install_tools(root: &Path) -> Result<()> {
         ),
     ] {
         ensure!(expected.len() == 64, "tool digest required");
-        let response = client.get(url).send()?;
-        ensure!(response.status().is_success(), "tool download failed");
-        let mut bytes = Vec::new();
-        response.take(128 * 1024 * 1024).read_to_end(&mut bytes)?;
-        ensure!(
-            fv_config::digest(&bytes) == expected,
-            "tool checksum mismatch"
-        );
         let path = dir.join(file);
-        fv_config::private_write(&path, &bytes)?;
+        if !tool_matches(&path, expected)? {
+            let response = client.get(url).send()?;
+            ensure!(response.status().is_success(), "tool download failed");
+            download_tool(response, &path, expected)?;
+        }
         if executable {
             run(
                 "install",
@@ -169,6 +270,48 @@ pub fn install_tools(root: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn tool_matches(path: &Path, expected: &str) -> Result<bool> {
+    if !path.symlink_metadata().is_ok_and(|meta| meta.is_file()) {
+        return Ok(false);
+    }
+    let checksum = Command::new("sha256sum").arg("--").arg(path).output()?;
+    Ok(checksum.status.success()
+        && std::str::from_utf8(&checksum.stdout)?
+            .split_whitespace()
+            .next()
+            == Some(expected))
+}
+
+fn download_tool(response: reqwest::blocking::Response, path: &Path, expected: &str) -> Result<()> {
+    use std::io::Read;
+    // Current Cosign builds exceed 128 MiB. Stream to disk on small VPSes.
+    const LIMIT: u64 = 256 * 1024 * 1024;
+    let temporary = path.with_extension(format!("download-{}", fv_config::random_secret()));
+    let result = (|| -> Result<()> {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
+        let length = std::io::copy(&mut response.take(LIMIT + 1), &mut file)?;
+        ensure!(length <= LIMIT, "tool download exceeds size limit");
+        file.sync_all()?;
+        ensure!(
+            tool_matches(&temporary, expected)?,
+            "tool checksum mismatch"
+        );
+        std::fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
 }
 
 pub fn assert_owned_host(c: &Config) -> Result<()> {

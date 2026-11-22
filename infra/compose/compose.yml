@@ -137,8 +137,10 @@ services:
     profiles: [applications]
     command: [node, dist/services/admin-api/main.js]
     networks: [data, edge]
+    volumes: ['./${FV_STATE_DIR}/admin:/run/fv:ro']
     environment:
       <<: *app-env
+      FV_STATE_DIR: /run/fv
       CONTROL_DATABASE_URL: postgresql://fv_admin:${ADMIN_PASSWORD}@postgres:5432/fv_control
       ADMIN_ORIGIN: ${ADMIN_ORIGIN}
       ROOT_ADMIN_ACTORS: ${ROOT_ADMIN_ACTORS}

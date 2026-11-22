@@ -1,0 +1,59 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "fv-provider-token-prefix"
+description = "GitHub, Cloudflare or AWS credential with a provider prefix"
+regex = '''\b(?:(?:ghp_|github_pat_|cfut_)[A-Za-z0-9_-]{24,}|AKIA[A-Z0-9]{16})\b'''
+keywords = ["ghp_", "github_pat_", "cfut_", "akia"]
+
+[[rules]]
+id = "fv-private-key-header"
+description = "Private key export header"
+regex = '''(?i)-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----'''
+keywords = ["-----begin"]
+
+[[rules]]
+id = "fv-literal-credential"
+description = "Literal value assigned to a credential variable"
+regex = '''(?m)^[ \t]*(?:export[ \t]+)?["']?(?:[A-Z0-9]+_)*(?:PASSWORD|SECRET(?:_KEY)?|PRIVATE_KEY|API_KEY|ACCESS_KEY|HMAC_KEY|STRIPE_KEY|TOKEN)["']?[ \t]*[=:][ \t]*(?:(?:"([^"\r\n$<>{}]+)"|'([^'\r\n$<>{}]+)')[ \t]*[,;]?|([^\s"'$\x60<>{}\[\],;#]+))[ \t]*(?:#.*)?\r?$'''
+keywords = ["password", "secret", "private_key", "api_key", "access_key", "hmac_key", "stripe_key", "token"]
+
+# Exact synthetic fixture values in their original tests.
+[[rules.allowlists]]
+condition = "AND"
+paths = ['''^tests/api-hardening\.test\.ts$''']
+regexes = ['''^synthetic-(?:local-signing-key-longer-than-32-bytes|hasura-key-longer-than-32-bytes|access|secret)$''']
+
+[[rules.allowlists]]
+condition = "AND"
+paths = ['''^tests/api-versioning\.test\.ts$''']
+regexes = ['''^synthetic-local-signing-key-longer-than-32-bytes$''']
+
+[[rules.allowlists]]
+condition = "AND"
+paths = ['''^tests/admin-hasura-security\.test\.ts$''']
+regexes = ['''^synthetic-private-hasura-secret$''']
+
+[[rules.allowlists]]
+condition = "AND"
+paths = ['''^tests/operation-hardening\.test\.ts$''']
+regexes = ['''^synthetic-(?:root|provider|local|monitor)$''']
+
+[[rules.allowlists]]
+condition = "AND"
+paths = ['''^tests/members-integration\.ts$''']
+regexes = ['''^(?:sk_test|whsec)_synthetic_fixture_only$''']
+
+[[rules]]
+id = "fv-inline-url-credential"
+description = "Literal password embedded in a service URL"
+regex = '''(?i)\b(?:postgres(?:ql)?|amqps?|rediss?|mysql|https?)://[^\s:/@?#$\{\}<>"'\\]+:([^\s:/@?#$\{\}<>"'\\]+)@'''
+secretGroup = 1
+keywords = ["://"]
+
+[[rules.allowlists]]
+condition = "AND"
+paths = ['''^crates/fv-config/src/lib\.rs$''']
+regexTarget = "line"
+regexes = ['''(?m)^[ \t]*"https://user:password@example\.com",[ \t]*\r?$''']

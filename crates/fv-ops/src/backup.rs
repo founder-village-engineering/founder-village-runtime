@@ -117,10 +117,9 @@ pub fn capture(root: &Path, c: &Config, kind: &str) -> Result<()> {
         &root.join(format!(".state/{}/backup-receipt.json", c.environment)),
         &serde_json::to_vec(&envelope)?,
     )?;
-    verify(root, c)?;
+    let fingerprint = verify_inventory(root, c)?;
     if c.environment != "local" {
         let env = super::env(root, c)?;
-        let fingerprint = digest(&body);
         fv_host::run(
             "node",
             &[
@@ -145,6 +144,10 @@ pub fn capture(root: &Path, c: &Config, kind: &str) -> Result<()> {
             &env,
             7200,
         )?;
+        private_write(
+            &root.join(format!(".state/{}/immutable-backup", c.environment)),
+            fingerprint.as_bytes(),
+        )?;
     }
     let mut db = super::client(root, c)?;
     db.execute("INSERT INTO control.backups(id,manifest_hash,offsite,verified) VALUES(gen_random_uuid(),$1,$2,true)",&[&digest(&body),&(c.environment!="local")])?;
@@ -152,6 +155,20 @@ pub fn capture(root: &Path, c: &Config, kind: &str) -> Result<()> {
     Ok(())
 }
 pub fn verify(root: &Path, c: &Config) -> Result<()> {
+    let fingerprint = verify_inventory(root, c)?;
+    if c.environment != "local" {
+        let mirrored =
+            fs::read_to_string(root.join(format!(".state/{}/immutable-backup", c.environment)))
+                .context("no verified immutable backup copy")?;
+        ensure!(
+            mirrored == fingerprint,
+            "immutable copy does not cover the current backup receipt"
+        );
+    }
+    Ok(())
+}
+
+fn verify_inventory(root: &Path, c: &Config) -> Result<String> {
     let bytes = fs::read(root.join(format!(".state/{}/backup-receipt.json", c.environment)))?;
     let receipt: Value = serde_json::from_slice(&bytes)?;
     let body = receipt["body"].as_str().context("missing body")?;
@@ -198,7 +215,7 @@ pub fn verify(root: &Path, c: &Config) -> Result<()> {
             .is_some_and(|old| old.iter().any(|b| b["label"] == newest["label"])),
         "backup receipt does not cover current backup"
     );
-    Ok(())
+    Ok(digest(body.as_bytes()))
 }
 pub fn restore_drill(root: &Path, c: &Config) -> Result<()> {
     verify(root, c)?;

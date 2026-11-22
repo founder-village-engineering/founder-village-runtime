@@ -6,25 +6,39 @@
 > Use placeholders and approved secret stores, inspect staged changes before every commit, and
 > immediately rotate anything that may have been exposed.
 
-The release workflow verifies code, builds immutable artifacts, signs the application image and source/runtime artifacts, and records exact digests. GitHub production environment protections and a dedicated trusted `fv-deploy` runner must be configured in the account; checked-in workflow files alone do not enable those settings.
+A protected `vMAJOR.MINOR.PATCH` tag on a commit reachable from `main` builds on native GitHub-hosted AMD64 and ARM64 runners. Each runner builds the Linux Rust CLI, checks the application containers against the local data stack, and scans its native image. The final job signs the exact multi-platform registry index and the source and CLI artifacts. The signed manifest binds the image index, both CLI hashes, and the exact source inventory to one revision. Tags and the `main` branch require repository-level protection. Configure the GHCR package for anonymous pulls of the public release. [GitHub-hosted runner platforms](https://docs.github.com/en/actions/reference/runners/github-hosted-runners), [Docker multi-platform images](https://docs.docker.com/build/building/multi-platform/)
 
-Deployments run from a clean matching source revision. Private environment manifests and state remain outside Git. The deployer checks the image registry and workflow signer, configuration/input fingerprints, backup freshness, migrations, Hasura metadata, inactive candidate readiness, proxy cutover, serving revision, and worker replacement. Application colors preserve independent immutable image/revision settings.
+Promote from an authenticated operator SSH session through Cloudflare Access using the root-owned CLI. Older manifests can use their existing WireGuard route. Keep privileged self-hosted runners disconnected from the public repository. Prepare each environment independently and promote the same signed image digest for staging and production. [GitHub runner security guidance](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/manage-access)
 
-```sh
-bin/fv --config config/staging.private.json release prepare --revision <40-character-source-sha> --image <approved-image-at-sha256-digest>
-bin/fv --config config/staging.private.json release deploy --id <prepared-fingerprint>
-```
-
-Repeat promotion with the same signed image in production, preparing a manifest bound to production configuration. `deploy.yml` accepts only a prepared fingerprint and executes the installed trusted CLI. It never checks out or executes a pull request on a privileged host.
-
-Browser-originated production operations additionally require fresh MFA with a nonce bound to the exact operation. Runners verify this independently and consume authorization once. Expired/failed/uncertain operations require reconciliation and a newly authorized request; resetting a database state field cannot replay the authorization.
-
-On failed candidate checks, serving traffic stays on the existing color. Postcheck failure restores the old routing and environment. Schema migrations must remain compatible with both colors; rollbacks never automatically execute destructive SQL. Keep failed receipts and inspect actual running images/leases before retrying.
+For a new host, follow [provisioning](PROVISIONING.md). For an application update, set `host` in the private bootstrap settings to the configured SSH hostname and omit `initialRootPublicKey`. Keep the console-pinned host key and private identity in the workstation settings. The bootstrap tool uses `cloudflared` for the connection. Schedule host or migration changes with an operator session and keep the prior release artifacts. Prepare the exact signed revision and image digest on the VM, then use the fingerprint printed by prepare.
 
 ```sh
-bin/fv --config config/production.private.json release rollback
+cd /opt/founder-village
+manifest=config/staging.private.json
+revision=$(sudo jq -er .revision .state/source-manifest.json)
+image=$(sudo jq -er .image .state/source-manifest.json)
+prepared=$(sudo bin/fv --config "$manifest" release prepare --revision "$revision" --image "$image")
+sudo bin/fv --config "$manifest" release deploy --id "$prepared"
+sudo bin/fv --config "$manifest" doctor
 ```
 
-A first launch has no earlier serving application to restore. Rollback requires an existing verified target. Explicit control-plane updates must keep CLI/SSH recovery available; ordinary application promotion preserves the separately pinned admin image.
+Promotion binds the installed source and image, checks the registry signer, verifies the recent backup receipt and its immutable-copy completion, and checks the selected image's Linux architecture and source revision. It applies additive migrations and verifies the inactive API color before switching Caddy. The proxy must serve the expected revision and both API and admin readiness routes before the new workers are accepted. The admin image has its own pin.
 
-`npm run release:verify` collects the expanded local checks with source fingerprints. It does not create provider approvals or reuse evidence from another revision. The routine deploy path does not silently launch that full collection.
+Once the tunnel is enabled, run the public check from an independent operator device using the production API origin and the signed revision. The scheduled uptime workflow uses the repository's public `FV_PUBLIC_API_URL` variable.
+
+```sh
+PUBLIC_API_URL=https://api.example.com PUBLIC_API_REVISION="$revision" node scripts/probe.ts
+```
+
+Browser-originated production operations require fresh MFA with a nonce bound to the operation. The runner independently verifies authorization and consumes it once. Expired, failed, or uncertain operations require reconciliation and a fresh authorization.
+
+A failed candidate keeps the current proxy route. If a cutover or worker check fails, the deployer restores the prior settings and route. Schema migrations must remain compatible with both colors. Manual rollback uses the previous verified API image and restarts its workers. Keep the receipt and reconcile the running release after an interrupted promotion.
+
+```sh
+sudo bin/fv --config "$manifest" release rollback
+sudo bin/fv --config "$manifest" doctor
+```
+
+The first launch has no previous color to roll back to. Stop public routing with `sudo systemctl stop fv-ingress.service` if a serving fault requires containment. Use the Hetzner console for stopping or restarting ingress because the same connector carries operator SSH. The runtime service restores promoted services from pinned image references on reboot. The ingress service is enabled separately and checks private readiness before starting Cloudflare Tunnel.
+
+`npm run release:verify` runs the expanded local checks with source fingerprints. Hosted publication, cloud provisioning, public ingress, authenticated behavior, offsite-copy verification, and clean-host recovery each require their own evidence.

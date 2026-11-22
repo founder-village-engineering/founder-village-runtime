@@ -37,7 +37,7 @@ The isolated Docker project is `fv-local`. Archlife containers, databases, secre
 - Desktop and mobile browser journeys pass against the built console; screenshots are under `.state/qa/`.
 - Rust formatting, Clippy with warnings denied, and workspace tests pass. ShellCheck and Actionlint check the authored shell/workflows.
 - Node production dependency audit and Rust advisory audit report no known vulnerabilities at the recorded local check. These are point-in-time dependency results, not a security certification.
-- The final local ARM64 application image passes the pinned Trivy scan with zero HIGH/CRITICAL findings. The runtime uses a digest-pinned distroless Debian 13 base and the verified Node binary, without a shell or npm. Both API colors, admin and workers reach healthy state; both proxy routes answer readiness; the packaged Cloudflare CLI runs without provider requests. Other service images and the hosted AMD64 release remain separate verification layers.
+- The recorded local ARM64 application image passed the pinned Trivy scan with zero HIGH/CRITICAL findings. The runtime uses a digest-pinned distroless Debian 13 base and the verified Node binary. Both API colors, admin, and workers reached healthy state. Both proxy routes answered readiness and the packaged Cloudflare CLI ran without provider requests. The tagged workflow now builds and scans both native platforms, with publication evidence still pending.
 - The owned RabbitMQ fixture was upgraded from 4.1 through the pinned 4.2 intermediate to 4.3.7 with its volume preserved.
 - Physical backup and named-point PITR complete in an isolated recovery container, validate every registered application database, and record observed timing and replay LSN. Recovery configuration follows settings authenticated with the backup. The drill explicitly does not claim clean-host recovery.
 - The actual Rust operation runner executed a queued local operation after checking its bound assertion; local identity mode is synthetic and does not establish real-provider MFA proof.
@@ -49,9 +49,9 @@ Detailed private receipts are under `.state/evidence/` and `.state/local/`. The 
 
 The following remain unexecuted and cannot be inferred from local tests:
 
-- Real Hetzner allocation, fresh Linux host convergence/ownership, IPv4/IPv6 exposure, and provider-console recovery.
+- Existing Hetzner VM adoption, fresh Ubuntu host convergence, IPv4/IPv6 exposure, and provider-console recovery.
 - Actual account/zone adoption, DNS/Tunnel/Access configuration, certificate behavior, `cf` provider requests, and identity-provider MFA/nonce/auth-time compatibility.
-- Real administrator sign-in, signed artifact publication and hosted CI, configured GitHub environment protections/deploy runner, and a serving production blue/green cutover/rollback.
+- Real administrator sign-in, signed artifact publication and hosted CI, protected release tags, and a serving production blue/green cutover/rollback.
 - Physical WireGuard device import, recent real handshake, intended private SSH access, and actual revocation/expiry on a Linux interface.
 - S3 signed uploads/downloads, storage quotas/lifecycle policy selected for real applications, provider encryption/retention-lock/deletion behavior, independent account/key custody, offsite immutable replication, and independently readable audit archives.
 - Actual provider alert delivery, sustained workload/capacity budgets, measured production RPO/RTO, and a monthly clean-VM disaster-recovery exercise.

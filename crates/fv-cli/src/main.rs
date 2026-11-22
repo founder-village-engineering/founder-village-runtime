@@ -46,6 +46,11 @@ enum Cmd {
     Up,
     Down,
     Doctor,
+    /// Start or stop the outbound tunnel for a promoted remote release.
+    Ingress {
+        #[arg(value_parser = ["up", "down"])]
+        action: String,
+    },
     BrokerUpgrade,
     QueueUpgrade,
     Provision {
@@ -53,6 +58,11 @@ enum Cmd {
         action: String,
         #[arg(long)]
         public_key: Option<PathBuf>,
+        /// Console-verified known_hosts for checking operator SSH before firewall lockdown.
+        #[arg(long)]
+        tunnel_known_hosts: Option<PathBuf>,
+        #[arg(long, requires = "tunnel_known_hosts")]
+        tunnel_identity: Option<PathBuf>,
     },
     Host {
         #[arg(value_parser=["plan","apply"])]
@@ -123,7 +133,8 @@ fn execute() -> Result<()> {
     let _lock = if matches!(
         a.command,
         Cmd::Ops { .. } | Cmd::LocalEdge { .. } | Cmd::Dev { .. }
-    ) {
+    ) || matches!(&a.command, Cmd::Provision { action, .. } if action != "apply")
+    {
         None
     } else {
         Some(fv_ops::lock(&root, &c)?)
@@ -161,9 +172,67 @@ fn execute() -> Result<()> {
         }
         Cmd::Up => {
             up::run(&root, &c, fv_host::run_command)?;
-            println!(
-                "data stack ready; start application services with bin/dev or deploy a signed release"
+            if c.environment == "local" {
+                println!("data stack ready; start local application services with bin/dev");
+            } else {
+                println!(
+                    "data stack ready; previously promoted application services resumed if present"
+                );
+            }
+        }
+        Cmd::Down => {
+            if c.environment == "local" {
+                fv_ops::compose(&root, &c, &["stop"])?;
+            } else {
+                fv_ops::compose(
+                    &root,
+                    &c,
+                    &["--profile", "applications", "--profile", "ingress", "stop"],
+                )?;
+            }
+        }
+        Cmd::Ingress { action } => {
+            ensure!(
+                c.environment != "local",
+                "public ingress requires a remote manifest"
             );
+            if action == "down" {
+                fv_ops::compose(&root, &c, &["--profile", "ingress", "stop", "cloudflared"])?;
+            } else {
+                fv_host::assert_platform(&c)?;
+                ensure!(
+                    !c.cloudflare.access_aud.is_empty()
+                        && c.tunnel_domains().all(|name| c
+                            .cloudflare
+                            .managed_names
+                            .iter()
+                            .any(|managed| managed == name)),
+                    "configure the tunnel routes and the Cloudflare Access audience"
+                );
+                let token = root.join(format!(".state/{}/tunnel/token", c.environment));
+                let metadata = token
+                    .symlink_metadata()
+                    .context("missing private tunnel token")?;
+                ensure!(
+                    metadata.is_file() && metadata.len() > 0,
+                    "invalid private tunnel token"
+                );
+                fv_ops::deploy::check_serving(&root, &c)?;
+                fv_ops::compose(
+                    &root,
+                    &c,
+                    &[
+                        "--profile",
+                        "ingress",
+                        "up",
+                        "-d",
+                        "--no-deps",
+                        "--no-build",
+                        "cloudflared",
+                    ],
+                )?;
+                println!("tunnel connector started; verify the public endpoints externally");
+            }
         }
         Cmd::QueueUpgrade => fv_host::run(
             "node",
@@ -179,10 +248,22 @@ fn execute() -> Result<()> {
             &fv_ops::env(&root, &c)?,
             1200,
         )?,
-        Cmd::Down => fv_ops::compose(&root, &c, &["stop"])?,
         Cmd::Doctor => {
             fv_ops::validate_images(&root)?;
             fv_ops::compose(&root, &c, &["ps", "--format", "json"])?;
+            if c.environment != "local" {
+                fv_host::assert_platform(&c)?;
+                ensure!(
+                    fv_host::docker_architecture()? == c.provider.architecture,
+                    "Docker architecture mismatch"
+                );
+                let revision = fv_ops::deploy::check_serving(&root, &c)?;
+                println!(
+                    "private proxy ready on linux/{}; serving revision {revision}",
+                    c.provider.architecture.oci()
+                );
+                return Ok(());
+            }
             let client = reqwest_client()?;
             for (name, url) in [
                 ("database-backed API", "http://127.0.0.1:43801/health/ready"),
@@ -197,21 +278,41 @@ fn execute() -> Result<()> {
                 "local service readiness passed; external firewall/VPN/restore proof is separate"
             );
         }
-        Cmd::Provision { action, public_key } => match action.as_str() {
+        Cmd::Provision {
+            action,
+            public_key,
+            tunnel_known_hosts,
+            tunnel_identity,
+        } => match action.as_str() {
             "plan" => println!(
                 "{}",
                 serde_json::to_string_pretty(&fv_provider::Hetzner::plan(&c))?
             ),
             "status" => println!("{}", fv_provider::Hetzner::new()?.status(&c)?),
             _ => {
-                let public = fs::read_to_string(public_key.context("--public-key required")?)?;
-                let init = fv_host::cloud_init(&c, &[public.trim().into()])?;
-                let result = fv_provider::Hetzner::new()?.apply(&c, &init)?;
+                if let Some(host) = &c.cloudflare.ssh_domain
+                    && c.ssh_cidrs.is_empty()
+                {
+                    fv_host::verify_tunnel_ssh(
+                        &root,
+                        host,
+                        &tunnel_known_hosts.context(
+                            "--tunnel-known-hosts is required to close public inbound access",
+                        )?,
+                        tunnel_identity.as_deref(),
+                    )?;
+                }
+                let init = public_key
+                    .map(fs::read_to_string)
+                    .transpose()?
+                    .map(|public| fv_host::cloud_init(&c, &[public.trim().into()]))
+                    .transpose()?;
+                let result = fv_provider::Hetzner::new()?.apply(&c, init.as_deref())?;
                 private_write(
                     &root.join(format!(".state/{}/provider.json", c.environment)),
                     &serde_json::to_vec(&result)?,
                 )?;
-                println!("{result}");
+                println!("Hetzner resources converged; private provider receipt saved");
             }
         },
         Cmd::Host { action } => {
@@ -221,12 +322,29 @@ fn execute() -> Result<()> {
                     "converge Linux host: Docker, firewall, systemd, private configuration; no public HTTP"
                 )
             } else {
-                ensure!(std::env::consts::OS == "linux", "host apply requires Linux");
+                fv_host::assert_platform(&c)?;
                 fv_host::assert_owned_host(&c)?;
                 fv_host::install_tools(&root)?;
                 let mut env = BTreeMap::new();
                 env.insert("FV_ROOT".into(), root.to_string_lossy().into_owned());
-                env.insert("FV_CONFIG".into(), a.config.to_string_lossy().into_owned());
+                env.insert(
+                    "FV_CONFIG".into(),
+                    root.join(a.config)
+                        .canonicalize()?
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+                env.insert("FV_ARCH".into(), c.provider.architecture.oci().into());
+                if c.cloudflare.ssh_domain.is_some() {
+                    env.insert(
+                        "FV_TUNNEL_SSH_INTERFACE".into(),
+                        fv_config::TUNNEL_SSH_INTERFACE.into(),
+                    );
+                    env.insert(
+                        "FV_TUNNEL_SSH_GATEWAY".into(),
+                        fv_config::TUNNEL_SSH_GATEWAY.into(),
+                    );
+                }
                 fv_host::run("bash", &[script.to_str().unwrap()], &root, &env, 900)?;
             }
         }

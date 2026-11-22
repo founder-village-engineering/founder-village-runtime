@@ -115,6 +115,10 @@ pub fn init(root: &Path, c: &Config) -> Result<()> {
         ("CF_ZONE_ID", c.cloudflare.zone_id.clone()),
         ("CF_ZONE_NAME", c.cloudflare.zone_name.clone()),
         ("CF_MANAGED_NAMES", c.cloudflare.managed_names.join(",")),
+        (
+            "CF_TUNNEL_NAMES",
+            c.tunnel_domains().collect::<Vec<_>>().join(","),
+        ),
     ] {
         e.insert(key.into(), value);
     }
@@ -151,38 +155,68 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
     }
     let external = root.join(format!("secrets/{}.env", c.environment));
     if external.exists() {
-        ensure!(
-            !external.symlink_metadata()?.file_type().is_symlink(),
-            "secret catalog must not be a symlink"
-        );
+        let meta = external.symlink_metadata()?;
+        ensure!(meta.is_file(), "secret catalog must be a regular file");
+        #[cfg(unix)]
+        if c.environment != "local" {
+            use std::os::unix::fs::PermissionsExt;
+            ensure!(
+                meta.permissions().mode() & 0o077 == 0,
+                "remote secret catalog must be private"
+            );
+        }
         for (key, value) in fv_config::env_read(&external)? {
             ensure!(
-                [
-                    "CF_",
-                    "CLOUDFLARE_",
-                    "BACKUP_S3_",
-                    "IMMUTABLE_",
-                    "AUDIT_",
-                    "OBJECT_",
-                    "ALERT_",
-                    "ACCESS_ADMIN_",
-                    "AGE_"
-                ]
-                .iter()
-                .any(|prefix| key.starts_with(prefix)),
+                key == "OIDC_MFA_ACR"
+                    || [
+                        "CF_",
+                        "CLOUDFLARE_",
+                        "BACKUP_S3_",
+                        "IMMUTABLE_",
+                        "AUDIT_",
+                        "OBJECT_",
+                        "ALERT_",
+                        "ACCESS_ADMIN_",
+                        "AGE_",
+                        "MEMBERS_",
+                    ]
+                    .iter()
+                    .any(|prefix| key.starts_with(prefix)),
                 "unknown external secret key"
             );
             ensure!(!value.contains(['\n', '\r']), "invalid external secret");
             e.insert(key, value);
         }
     }
-    // DNS ownership and naming policy come from the validated manifest, even
-    // when a secret catalog also contains CF_* settings.
-    e.insert("CF_ZONE_NAME".into(), c.cloudflare.zone_name.clone());
-    e.insert(
-        "CF_MANAGED_NAMES".into(),
-        c.cloudflare.managed_names.join(","),
-    );
+    // A catalog can supply credentials; the validated manifest owns routing,
+    // identity settings and the scope of provider access.
+    for (key, value) in [
+        ("CF_BINARY", c.cloudflare.cf_binary.clone()),
+        ("CF_SHA256", c.cloudflare.cf_sha256.clone()),
+        ("CF_ACCOUNT_ID", c.cloudflare.account_id.clone()),
+        ("CF_ZONE_ID", c.cloudflare.zone_id.clone()),
+        ("CF_ZONE_NAME", c.cloudflare.zone_name.clone()),
+        ("CF_MANAGED_NAMES", c.cloudflare.managed_names.join(",")),
+        ("ACCESS_TEAM", c.cloudflare.access_team.clone()),
+        ("ACCESS_AUD", c.cloudflare.access_aud.clone()),
+        ("OIDC_ISSUER", c.auth.issuer.clone()),
+        ("OIDC_AUDIENCE", c.auth.audience.clone()),
+        ("OIDC_JWKS_URL", c.auth.jwks_url.clone()),
+        ("OIDC_CLIENT_ID", c.auth.client_id.clone()),
+        (
+            "OIDC_AUTHORIZATION_ENDPOINT",
+            c.auth.authorization_endpoint.clone(),
+        ),
+        ("OIDC_TOKEN_ENDPOINT", c.auth.token_endpoint.clone()),
+        ("ADMIN_ORIGIN", format!("https://{}", c.admin_domain)),
+        ("API_ORIGIN", format!("https://{}", c.api_domain)),
+    ] {
+        // Local operator overrides for cf are used by the isolated test and
+        // domain tooling. The remote manifest owns every provider setting.
+        if c.environment != "local" || matches!(key, "CF_ZONE_NAME" | "CF_MANAGED_NAMES") {
+            e.insert(key.into(), value);
+        }
+    }
     let dir = root.join(format!(".state/{}", c.environment));
     let images = super::validate_images(root)?;
     for name in [
@@ -316,7 +350,7 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
     private_write(&dir.join("postgres/pgbackrest.conf"), pgbackrest.as_bytes())?;
     let mut api_env = serde_json::Map::new();
     for (key, value) in &e {
-        if key.starts_with("OBJECT_") || key.starts_with("OTEL_") {
+        if key.starts_with("OBJECT_") || key.starts_with("OTEL_") || key.starts_with("MEMBERS_") {
             api_env.insert(key.clone(), json!(value));
         }
     }
@@ -336,11 +370,21 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
             );
         }
     }
+    let mut overlay = json!({"services":{"api-blue":{"environment":api_env},"api-green":{"environment":api_env},"workers":{"environment":worker_env},"hasura":{"environment":hasura_env}}});
+    if c.cloudflare.ssh_domain.is_some() {
+        overlay["services"]["cloudflared"] = json!({
+            "networks": ["edge", "tunnel-ssh"],
+            "extra_hosts": {"fv-operator":fv_config::TUNNEL_SSH_GATEWAY}
+        });
+        overlay["networks"] = json!({"tunnel-ssh": {
+            "driver":"bridge", "internal":true,
+            "driver_opts":{"com.docker.network.bridge.name":fv_config::TUNNEL_SSH_INTERFACE},
+            "ipam":{"config":[{"subnet":fv_config::TUNNEL_SSH_SUBNET,"gateway":fv_config::TUNNEL_SSH_GATEWAY}]}
+        }});
+    }
     private_write(
         &dir.join("applications.compose.json"),
-        &serde_json::to_vec(
-            &json!({"services":{"api-blue":{"environment":api_env},"api-green":{"environment":api_env},"workers":{"environment":worker_env},"hasura":{"environment":hasura_env}}}),
-        )?,
+        &serde_json::to_vec(&overlay)?,
     )?;
     let jwt = json!({"type":"HS256","key":e["HASURA_JWT_SECRET"],"issuer":"fv-api","audience":"fv-hasura"});
     if let Some(token) = e.get("CLOUDFLARE_TUNNEL_TOKEN") {
@@ -391,5 +435,20 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
     );
     private_write(&dir.join("caddy/Caddyfile"), caddy.as_bytes())?;
     private_write(&dir.join("runtime.json"), &serde_json::to_vec_pretty(c)?)?;
+    // The admin container receives only the fields displayed by its domain view.
+    let admin_routes = dir.join("admin/runtime.json");
+    private_write(
+        &admin_routes,
+        &serde_json::to_vec(&json!({
+            "environment":c.environment, "api_domain":c.api_domain, "admin_domain":c.admin_domain,
+            "cloudflare":{"zone_name":c.cloudflare.zone_name,"managed_names":c.cloudflare.managed_names}
+        }))?,
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir.join("admin"), fs::Permissions::from_mode(0o755))?;
+        fs::set_permissions(admin_routes, fs::Permissions::from_mode(0o644))?;
+    }
     Ok(())
 }

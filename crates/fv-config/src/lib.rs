@@ -26,6 +26,43 @@ pub struct Provider {
     pub server_type: String,
     pub image: String,
     pub ssh_key_ids: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Architecture::is_amd64")]
+    pub architecture: Architecture,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub existing_server: Option<ExistingServer>,
+}
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Architecture {
+    #[default]
+    Amd64,
+    Arm64,
+}
+impl Architecture {
+    pub fn oci(self) -> &'static str {
+        match self {
+            Self::Amd64 => "amd64",
+            Self::Arm64 => "arm64",
+        }
+    }
+
+    pub fn from_machine(machine: &str) -> Result<Self> {
+        match machine {
+            "amd64" | "x86_64" => Ok(Self::Amd64),
+            "arm64" | "aarch64" => Ok(Self::Arm64),
+            _ => bail!("unsupported Linux architecture"),
+        }
+    }
+
+    fn is_amd64(&self) -> bool {
+        *self == Self::Amd64
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExistingServer {
+    pub id: u64,
+    pub ipv4: std::net::Ipv4Addr,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,9 +73,14 @@ pub struct Cloudflare {
     pub managed_names: Vec<String>,
     pub access_team: String,
     pub access_aud: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_domain: Option<String>,
     pub cf_binary: String,
     pub cf_sha256: String,
 }
+pub const TUNNEL_SSH_INTERFACE: &str = "fv-tunnel-ssh";
+pub const TUNNEL_SSH_GATEWAY: &str = "172.30.248.1";
+pub const TUNNEL_SSH_SUBNET: &str = "172.30.248.0/29";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Backup {
@@ -138,6 +180,12 @@ pub fn load(path: &Path) -> Result<Config> {
     Ok(c)
 }
 impl Config {
+    pub fn tunnel_domains(&self) -> impl Iterator<Item = &str> {
+        [self.api_domain.as_str(), self.admin_domain.as_str()]
+            .into_iter()
+            .chain(self.cloudflare.ssh_domain.as_deref())
+    }
+
     pub fn validate(&self) -> Result<()> {
         ensure!(
             ["local", "staging", "production"].contains(&self.environment.as_str()),
@@ -159,6 +207,15 @@ impl Config {
         } else {
             &self.cloudflare.zone_name
         };
+        if self.environment != "local" {
+            ensure!(
+                domain(zone)
+                    && !zone.ends_with(".fv")
+                    && zone != "fv.test"
+                    && !zone.ends_with(".fv.test"),
+                "remote deployment requires a public DNS zone"
+            );
+        }
         ensure!(
             direct_subdomain(&self.api_domain, zone) && direct_subdomain(&self.admin_domain, zone),
             "API and admin must be one-level subdomains of {zone}"
@@ -195,7 +252,8 @@ impl Config {
             ensure!(identifier(s), "invalid provider selection");
         }
         ensure!(
-            self.provider.image.len() < 64
+            !self.provider.image.is_empty()
+                && self.provider.image.len() < 64
                 && self
                     .provider
                     .image
@@ -203,6 +261,15 @@ impl Config {
                     .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.'),
             "invalid OS image"
         );
+        if let Some(server) = &self.provider.existing_server {
+            ensure!(
+                self.environment != "local"
+                    && server.id > 0
+                    && !server.ipv4.is_unspecified()
+                    && !server.ipv4.is_loopback(),
+                "invalid existing server binding"
+            );
+        }
         ensure!(
             self.backup.retention_days >= 30
                 && self.backup.rpo_seconds > 0
@@ -215,11 +282,24 @@ impl Config {
                 "managed DNS records must be one-level subdomains of the zone"
             );
         }
-        if self.environment != "local" {
+        if let Some(ssh) = &self.cloudflare.ssh_domain {
             ensure!(
-                !self.provider.ssh_key_ids.is_empty() && !self.ssh_cidrs.is_empty(),
-                "bootstrap SSH keys and CIDRs required"
+                self.environment != "local"
+                    && direct_subdomain(ssh, zone)
+                    && ssh != &self.api_domain
+                    && ssh != &self.admin_domain,
+                "tunnel SSH must use a separate one-level public hostname"
             );
+            ensure!(
+                self.tunnel_domains().all(|name| self
+                    .cloudflare
+                    .managed_names
+                    .iter()
+                    .any(|managed| managed == name)),
+                "tunnel hostnames must be explicitly managed"
+            );
+        }
+        if self.environment != "local" {
             for id in [&self.cloudflare.account_id, &self.cloudflare.zone_id] {
                 ensure!(
                     id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()),

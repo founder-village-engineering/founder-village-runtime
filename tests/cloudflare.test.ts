@@ -64,6 +64,34 @@ test("unmanaged domains never reach the CLI", async () => {
   await assert.rejects(() => cf.inventory("unrelated.example.com"));
   assert.equal(cf.calls.length, 0);
 });
+test("only the tunnel provisioner can publish a proxied tunnel CNAME for a reserved hostname", async (t) => {
+  const previous = process.env.CF_TUNNEL_NAMES;
+  t.after(() => {
+    if (previous === undefined) delete process.env.CF_TUNNEL_NAMES;
+    else process.env.CF_TUNNEL_NAMES = previous;
+  });
+  const host = "canary.example.com";
+  process.env.CF_TUNNEL_NAMES = host;
+  const cf = new Fixture(true);
+  const tunnelId = "11111111-2222-4333-8444-555555555555";
+  await assert.rejects(() => cf.apply(host, cf.state, null), /tunnel workflow/);
+  await assert.rejects(
+    () => cf.ensureTunnelRecord(host, tunnelId, cf.state, false),
+    /review/,
+  );
+  assert.equal(cf.calls.length, 0);
+  cf.state = null;
+  await assert.rejects(
+    () => cf.ensureTunnelRecord(host, tunnelId, null, true),
+    /review/,
+  );
+  await cf.ensureTunnelRecord(host, tunnelId, null, false);
+  const record = cf.state as Existing | null;
+  assert.equal(record?.content, `${tunnelId}.cfargotunnel.com`);
+  assert.equal(record?.type, "CNAME");
+  assert.equal(record?.proxied, true);
+  await cf.ensureTunnelRecord(host, tunnelId, record, true);
+});
 test("nested records remain forbidden even if explicitly allowlisted", async (t) => {
   const previous = process.env.CF_MANAGED_NAMES;
   t.after(() => {

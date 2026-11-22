@@ -26,6 +26,12 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { server } from "../../packages/observability/index.ts";
 import { installFrontendCors } from "./cors.ts";
 import { registerFoodDeliveryRoutes } from "./food-deliveries.ts";
+import { MemberPayments } from "./members/payments.ts";
+import {
+  registerMemberRoutes,
+  registerMemberWebhook,
+} from "./members/routes.ts";
+import { applicationId as membersApplicationId } from "../../packages/frontend-contracts/founder-village-members/index.ts";
 import {
   installApiVersionHeaders,
   registerApiVersionCatalog,
@@ -39,6 +45,18 @@ export async function api(databases: Record<string, pg.Pool> | pg.Pool) {
     selectApplication(all, req.headers["x-application-id"]);
   const app = await server("api");
   installFrontendCors(app);
+  const membersDb = all[membersApplicationId];
+  const payments = membersDb ? new MemberPayments(membersDb) : undefined;
+  if (payments) {
+    registerMemberWebhook(app, payments);
+    let stop: (() => Promise<void>) | undefined;
+    app.addHook("onReady", async () => {
+      stop = payments.startReconciliation();
+    });
+    app.addHook("onClose", async () => {
+      await stop?.();
+    });
+  }
   app.get("/health/ready", async () => {
     await Promise.all(Object.values(all).map((db) => db.query("SELECT 1")));
     return { status: "ready" };
@@ -47,6 +65,8 @@ export async function api(databases: Record<string, pg.Pool> | pg.Pool) {
   // gets a separate registrar and must not alter v1 behavior in place.
   const registerV1Routes = (routes: FastifyInstance) => {
     registerFoodDeliveryRoutes(routes, all);
+    if (membersDb && payments)
+      registerMemberRoutes(routes, membersDb, payments);
     routes.get("/records", async (req) => {
       const db = application(req);
       const who = await bearer(req),

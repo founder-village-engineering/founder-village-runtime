@@ -63,8 +63,6 @@ const required = [
   "images.lock.json",
   "backup-receipt.json",
 ];
-if (body.environment !== "local")
-  required.push("wireguard.key.age", "wireguard-peers.json.age");
 if (
   required.some(
     (name) => !body.artifacts.some((artifact) => artifact.name === name),
@@ -94,6 +92,21 @@ for (const a of body.artifacts) {
     createHash("sha256").update(bytes).digest("hex") !== a.sha256
   )
     throw new Error("recovery artifact altered");
+}
+if (body.environment !== "local") {
+  const config = z
+    .object({
+      environment: z.literal(body.environment),
+      cloudflare: z.object({ ssh_domain: z.string().min(1).nullish() }),
+    })
+    .parse(JSON.parse(await readFile(path.join(dir, "runtime.json"), "utf8")));
+  const wireguard = ["wireguard.key.age", "wireguard-peers.json.age"];
+  if (
+    (!config.cloudflare.ssh_domain ||
+      wireguard.some((name) => actual.includes(name))) &&
+    !wireguard.every((name) => actual.includes(name))
+  )
+    throw new Error("incomplete WireGuard recovery artifact-set");
 }
 console.log(
   JSON.stringify({

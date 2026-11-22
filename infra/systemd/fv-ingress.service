@@ -1,0 +1,14 @@
+[Unit]
+Description=Founder Village Cloudflare Tunnel
+Requires=fv-runtime.service
+After=fv-runtime.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/target/release/fv --config @CONFIG@ ingress up
+ExecStop=@ROOT@/target/release/fv --config @CONFIG@ ingress down
+TimeoutStartSec=180
+UMask=0077
+[Install]
+WantedBy=multi-user.target

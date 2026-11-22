@@ -31,6 +31,12 @@ pub fn compose_command(root: &Path, c: &Config, args: &[&str]) -> std::process::
     a.extend(args);
     let mut command = std::process::Command::new("docker");
     command.args(a).current_dir(root);
+    if c.environment != "local" {
+        command.env(
+            "DOCKER_DEFAULT_PLATFORM",
+            format!("linux/{}", c.provider.architecture.oci()),
+        );
+    }
     command
 }
 pub fn lock(root: &Path, c: &Config) -> Result<fs::File> {

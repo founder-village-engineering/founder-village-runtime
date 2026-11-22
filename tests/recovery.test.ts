@@ -98,6 +98,41 @@ test("recovery verifier authenticates exact artifacts and rejects tampering, ext
     await assert.rejects(verify);
     await unlink(path.join(dir, file));
     await writeFile(path.join(dir, file), data);
+    const runtime = Buffer.from(
+      JSON.stringify({
+        environment: "staging",
+        cloudflare: { ssh_domain: "ssh.example.com" },
+      }),
+    );
+    await writeFile(path.join(dir, "runtime.json"), runtime);
+    const tunneled = {
+      ...contents,
+      environment: "staging",
+      artifacts: contents.artifacts.map((artifact) =>
+        artifact.name === "runtime.json"
+          ? {
+              ...artifact,
+              size: runtime.length,
+              sha256: createHash("sha256").update(runtime).digest("hex"),
+            }
+          : artifact,
+      ),
+    };
+    await writeManifest(tunneled);
+    await verify();
+    const loneKey = {
+      name: "wireguard.key.age",
+      size: data.length,
+      sha256: createHash("sha256").update(data).digest("hex"),
+    };
+    await writeFile(path.join(dir, loneKey.name), data);
+    await writeManifest({
+      ...tunneled,
+      artifacts: [...tunneled.artifacts, loneKey],
+    });
+    await assert.rejects(verify);
+    await unlink(path.join(dir, loneKey.name));
+    await writeManifest(tunneled);
     await copyFile(path.join(dir, "manifest.json"), `${dir}.manifest`);
     await unlink(path.join(dir, "manifest.json"));
     await symlink(`${dir}.manifest`, path.join(dir, "manifest.json"));

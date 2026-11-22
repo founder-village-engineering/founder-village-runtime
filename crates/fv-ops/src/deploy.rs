@@ -42,6 +42,23 @@ pub fn prepare(root: &Path, c: &Config, revision: &str, image: &str) -> Result<S
                 manifest["revision"] == revision,
                 "installed signed source revision mismatch"
             );
+            if manifest["version"] == 2 {
+                ensure!(
+                    manifest["image"] == image,
+                    "image is outside the installed signed release"
+                );
+                ensure!(
+                    manifest["binaries"][c.provider.architecture.oci()]
+                        == digest(&fs::read(root.join("target/release/fv"))?),
+                    "installed native CLI does not match the signed release"
+                );
+            } else {
+                ensure!(
+                    manifest["version"] == 1
+                        && c.provider.architecture == fv_config::Architecture::Amd64,
+                    "installed source manifest does not support this platform"
+                );
+            }
             for entry in manifest["files"]
                 .as_array()
                 .context("missing signed source inventory")?
@@ -91,8 +108,18 @@ pub fn deploy(root: &Path, c: &Config, id: &str) -> Result<()> {
     let new_id = prepare(root, c, &release.revision, &release.image)?;
     ensure!(new_id == id, "release input drift");
     if c.environment != "local" {
+        fv_host::assert_platform(c)?;
+        ensure!(
+            !c.cloudflare.access_aud.is_empty(),
+            "configure the Cloudflare Access audience before promotion"
+        );
         super::backup::verify(root, c)?;
     }
+    let arch = fv_host::docker_architecture()?;
+    ensure!(
+        c.environment == "local" || arch == c.provider.architecture,
+        "Docker architecture does not match this host manifest"
+    );
     let policy: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("policies/release.json"))?)?;
     approved_image(
@@ -117,10 +144,45 @@ pub fn deploy(root: &Path, c: &Config, id: &str) -> Result<()> {
         &BTreeMap::new(),
         120,
     )?;
+    fv_host::run(
+        "docker",
+        &[
+            "pull",
+            "--platform",
+            &format!("linux/{}", arch.oci()),
+            &release.image,
+        ],
+        root,
+        &BTreeMap::new(),
+        300,
+    )?;
+    let labels = std::process::Command::new("docker")
+        .args([
+            "image", "inspect", "--format",
+            "{{.Os}}/{{.Architecture}} {{index .Config.Labels \"org.opencontainers.image.revision\"}}",
+            &release.image,
+        ])
+        .output()?;
+    ensure!(
+        labels.status.success()
+            && std::str::from_utf8(&labels.stdout)?.trim()
+                == format!("linux/{} {}", arch.oci(), release.revision),
+        "image platform or source revision mismatch"
+    );
     let state = root.join(format!(".state/{}", c.environment));
     let previous = fs::read_to_string(state.join("active-color"))?;
     let next = opposite_color(&previous)?;
     let mut env = super::env(root, c)?;
+    if fs::read_to_string(state.join("current-release")).is_ok_and(|current| current == id)
+        && env.get(&format!("FV_API_{}_IMAGE", previous.trim().to_uppercase()))
+            == Some(&release.image)
+        && env.get(&format!(
+            "FV_API_{}_REVISION",
+            previous.trim().to_uppercase()
+        )) == Some(&release.revision)
+    {
+        return check_proxy(c, &release.revision);
+    }
     env.insert("FV_APP_IMAGE".into(), release.image.clone());
     env.insert(
         format!("FV_API_{}_IMAGE", next.to_uppercase()),
@@ -143,21 +205,11 @@ pub fn deploy(root: &Path, c: &Config, id: &str) -> Result<()> {
             .as_bytes(),
     )?;
     let service = format!("api-{next}");
+    let previous_exists =
+        env.contains_key(&format!("FV_API_{}_IMAGE", previous.trim().to_uppercase()));
+    let mut cutover = false;
+    let mut workers_replaced = false;
     let attempt = (|| -> Result<()> {
-        super::compose(root, c, &["pull", &service])?;
-        let labels = std::process::Command::new("docker")
-            .args([
-                "image",
-                "inspect",
-                "--format",
-                "{{index .Config.Labels \"org.opencontainers.image.revision\"}}",
-                &release.image,
-            ])
-            .output()?;
-        ensure!(
-            labels.status.success() && String::from_utf8(labels.stdout)?.trim() == release.revision,
-            "image source revision mismatch"
-        );
         fv_host::run(
             "node",
             &["--import", "tsx", "packages/database/migrate.ts"],
@@ -172,66 +224,38 @@ pub fn deploy(root: &Path, c: &Config, id: &str) -> Result<()> {
             &env,
             120,
         )?;
-        super::compose(root, c, &["up", "-d", "--no-deps", &service])?;
-        super::compose(root, c, &["up", "-d", "--no-deps", "admin", "caddy"])?;
+        start(root, c, &[&service, "admin", "caddy"])?;
         ready(
             if next == "blue" { 43811 } else { 43812 },
             &release.revision,
         )?;
-        if env.contains_key(&format!("FV_API_{}_IMAGE", previous.trim().to_uppercase())) {
-            private_write(&state.join("previous-color"), previous.trim().as_bytes())?;
-        }
         private_write(&state.join("active-color"), next.as_bytes())?;
+        cutover = true;
         super::render::render(root, c)?;
-        super::compose(
-            root,
-            c,
-            &[
-                "exec",
-                "-T",
-                "caddy",
-                "caddy",
-                "reload",
-                "--config",
-                "/etc/caddy/Caddyfile",
-            ],
-        )?;
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()?;
-        let status = client
-            .get("http://127.0.0.1:43880/health/live")
-            .header("Host", &c.api_domain)
-            .send()?;
-        ensure!(status.status().is_success(), "proxy postcheck failed");
-        let served: serde_json::Value = status.json()?;
-        ensure!(
-            served["revision"] == release.revision,
-            "serving revision mismatch"
-        );
+        reload_proxy(root, c)?;
+        check_proxy(c, &release.revision)?;
+        workers_replaced = true;
         super::compose(root, c, &["stop", "workers"])?;
-        super::compose(root, c, &["up", "-d", "--no-deps", "workers"])?;
+        start(root, c, &["workers"])?;
         Ok(())
     })();
-    if attempt.is_err() {
+    if let Err(failure) = attempt {
         private_write(&state.join("active-color"), previous.trim().as_bytes())?;
         private_write(&file, &old_env)?;
         super::render::render(root, c)?;
-        super::compose(
-            root,
-            c,
-            &[
-                "exec",
-                "-T",
-                "caddy",
-                "caddy",
-                "reload",
-                "--config",
-                "/etc/caddy/Caddyfile",
-            ],
-        )?;
-        let _ = super::compose(root, c, &["up", "-d", "--no-deps", "workers"]);
-        return attempt;
+        if cutover && previous_exists {
+            reload_proxy(root, c).context("failed to restore previous proxy route")?;
+        }
+        if workers_replaced && previous_exists {
+            start(root, c, &["workers"]).context("failed to restore previous workers")?;
+        }
+        if !previous_exists {
+            super::compose(root, c, &["stop", &service, "admin", "caddy", "workers"])?;
+        }
+        return Err(failure);
+    }
+    if previous_exists {
+        private_write(&state.join("previous-color"), previous.trim().as_bytes())?;
     }
     private_write(&state.join("current-release"), id.as_bytes())?;
     let mut db = super::client(root, c)?;
@@ -239,8 +263,115 @@ pub fn deploy(root: &Path, c: &Config, id: &str) -> Result<()> {
     super::record(root, c, "deploy.release", "succeeded")?;
     Ok(())
 }
+
+fn start(root: &Path, c: &Config, services: &[&str]) -> Result<()> {
+    let mut args = vec![
+        "up",
+        "-d",
+        "--no-deps",
+        "--no-build",
+        "--wait",
+        "--wait-timeout",
+        "90",
+    ];
+    args.extend_from_slice(services);
+    super::compose(root, c, &args)
+}
+
+fn reload_proxy(root: &Path, c: &Config) -> Result<()> {
+    super::compose(
+        root,
+        c,
+        &[
+            "exec",
+            "-T",
+            "caddy",
+            "caddy",
+            "reload",
+            "--config",
+            "/etc/caddy/Caddyfile",
+        ],
+    )
+}
+
+fn check_proxy(c: &Config, revision: &str) -> Result<()> {
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    for host in [&c.api_domain, &c.admin_domain] {
+        let response = client
+            .get("http://127.0.0.1:43880/health/ready")
+            .header("Host", host)
+            .send()?;
+        ensure!(
+            response.status().is_success(),
+            "proxy readiness check failed"
+        );
+    }
+    let response = client
+        .get("http://127.0.0.1:43880/health/live")
+        .header("Host", &c.api_domain)
+        .send()?
+        .error_for_status()?;
+    let served: serde_json::Value = response.json()?;
+    ensure!(served["revision"] == revision, "serving revision mismatch");
+    Ok(())
+}
+
+fn active_release(root: &Path, c: &Config) -> Result<(String, String)> {
+    let state = root.join(format!(".state/{}", c.environment));
+    ensure!(
+        state.join("current-release").is_file(),
+        "no promoted release"
+    );
+    let value = fs::read_to_string(state.join("active-color"))?;
+    let color = value.trim();
+    opposite_color(color)?;
+    let env = super::env(root, c)?;
+    let policy: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("policies/release.json"))?)?;
+    let prefix = policy["registryPrefix"]
+        .as_str()
+        .context("missing registry policy")?;
+    for key in [
+        format!("FV_API_{}_IMAGE", color.to_uppercase()),
+        "FV_ADMIN_IMAGE".into(),
+        "FV_APP_IMAGE".into(),
+    ] {
+        approved_image(env.get(&key).context("missing promoted image")?, prefix)?;
+    }
+    let revision = env
+        .get(&format!("FV_API_{}_REVISION", color.to_uppercase()))
+        .context("missing promoted revision")?;
+    ensure!(
+        revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit()),
+        "invalid promoted revision"
+    );
+    Ok((format!("api-{color}"), revision.clone()))
+}
+
+pub fn resume(root: &Path, c: &Config) -> Result<()> {
+    if root
+        .join(format!(".state/{}/current-release", c.environment))
+        .exists()
+    {
+        let (service, revision) = active_release(root, c)?;
+        start(root, c, &[&service, "admin", "caddy", "workers"])?;
+        check_proxy(c, &revision)?;
+    }
+    Ok(())
+}
+
+pub fn check_serving(root: &Path, c: &Config) -> Result<String> {
+    let (_, revision) = active_release(root, c)?;
+    check_proxy(c, &revision)?;
+    Ok(revision)
+}
 fn ready(port: u16, revision: &str) -> Result<()> {
     let client = reqwest::blocking::Client::builder()
+        .no_proxy()
         .timeout(Duration::from_secs(2))
         .build()?;
     for _ in 0..60 {
@@ -282,6 +413,20 @@ pub fn rollback(root: &Path, c: &Config) -> Result<()> {
         ))
         .context("no previous verified revision")?
         .clone();
+    let image = env
+        .get(&format!("FV_API_{}_IMAGE", previous.trim().to_uppercase()))
+        .context("no previous immutable artifact")?
+        .clone();
+    let policy: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("policies/release.json"))?)?;
+    approved_image(
+        &image,
+        policy["registryPrefix"]
+            .as_str()
+            .context("missing registry policy")?,
+    )?;
+    let service = format!("api-{}", previous.trim());
+    start(root, c, &[&service])?;
     ready(
         if previous.trim() == "blue" {
             43811
@@ -290,41 +435,35 @@ pub fn rollback(root: &Path, c: &Config) -> Result<()> {
         },
         &revision,
     )?;
-    let image = env
-        .get(&format!("FV_API_{}_IMAGE", previous.trim().to_uppercase()))
-        .context("no previous immutable artifact")?
-        .clone();
     env.insert("FV_APP_IMAGE".into(), image);
-    env.insert("FV_REVISION".into(), revision);
+    env.insert("FV_REVISION".into(), revision.clone());
+    let file = root.join(format!(".state/{}.env", c.environment));
+    let old_env = fs::read(&file)?;
     private_write(
-        &root.join(format!(".state/{}.env", c.environment)),
+        &file,
         env.iter()
             .map(|(k, v)| format!("{k}={v}\n"))
             .collect::<String>()
             .as_bytes(),
     )?;
 
-    private_write(&state.join("active-color"), previous.trim().as_bytes())?;
-    super::render::render(root, c)?;
-    if let Err(e) = super::compose(
-        root,
-        c,
-        &[
-            "exec",
-            "-T",
-            "caddy",
-            "caddy",
-            "reload",
-            "--config",
-            "/etc/caddy/Caddyfile",
-        ],
-    ) {
-        private_write(&state.join("active-color"), current.as_bytes())?;
-        return Err(e);
+    let attempt = (|| -> Result<()> {
+        private_write(&state.join("active-color"), previous.trim().as_bytes())?;
+        super::render::render(root, c)?;
+        reload_proxy(root, c)?;
+        check_proxy(c, &revision)?;
+        super::compose(root, c, &["stop", "workers"])?;
+        start(root, c, &["workers"])
+    })();
+    if let Err(failure) = attempt {
+        private_write(&state.join("active-color"), current.trim().as_bytes())?;
+        private_write(&file, &old_env)?;
+        super::render::render(root, c)?;
+        reload_proxy(root, c).context("failed to restore current proxy route")?;
+        start(root, c, &["workers"]).context("failed to restore current workers")?;
+        return Err(failure);
     }
-    private_write(&state.join("previous-color"), current.as_bytes())?;
-    super::compose(root, c, &["stop", "workers"])?;
-    super::compose(root, c, &["up", "-d", "--no-deps", "workers"])?;
+    private_write(&state.join("previous-color"), current.trim().as_bytes())?;
     super::record(root, c, "deploy.rollback", "succeeded")?;
     Ok(())
 }

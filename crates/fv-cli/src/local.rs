@@ -218,7 +218,12 @@ fn service_env(
     }
     if name == "api" {
         keys.extend(["HASURA_URL", "HASURA_JWT_SECRET"].map(str::to_owned));
-        keys.extend(catalog.keys().filter(|k| k.starts_with("OBJECT_")).cloned());
+        keys.extend(
+            catalog
+                .keys()
+                .filter(|k| k.starts_with("OBJECT_") || k.starts_with("MEMBERS_"))
+                .cloned(),
+        );
     }
     let mut vars: BTreeMap<String, String> = keys
         .into_iter()
@@ -463,17 +468,21 @@ mod tests {
             ("BACKUP_S3_SECRET", "synthetic-backup"),
             ("RUNNER_DATABASE_URL", "synthetic-runner"),
             ("DOCKER_HOST", "synthetic-socket"),
+            ("MEMBERS_STRIPE_KEY", "synthetic-members-provider"),
         ]
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
         .into();
         let vars = service_env(&root, "admin-api", &catalog).unwrap();
         assert_eq!(vars["CONTROL_DATABASE_URL"], "synthetic-admin");
         assert_eq!(vars["CF_READ_TOKEN"], "synthetic-read");
+        let api = service_env(&root, "api", &catalog).unwrap();
+        assert_eq!(api["MEMBERS_STRIPE_KEY"], "synthetic-members-provider");
         for key in [
             "CF_WRITE_TOKEN",
             "BACKUP_S3_SECRET",
             "RUNNER_DATABASE_URL",
             "DOCKER_HOST",
+            "MEMBERS_STRIPE_KEY",
         ] {
             assert!(!vars.contains_key(key), "leaked {key}");
         }
