@@ -84,22 +84,42 @@ def read_jsonc(path: Path) -> Any:
     return json.loads("".join(output))
 
 
-def contract_digest(source: Path) -> tuple[str, list[str]]:
+def source_files(source: Path) -> dict[str, Path]:
     files = sorted(path for path in source.rglob("*") if path.is_file())
     if not files:
         raise ValueError(f"empty contract source: {source}")
-    digest = hashlib.sha256()
-    names: list[str] = []
+    paths: dict[str, Path] = {}
     for path in files:
         if path.is_symlink() or path.suffix != ".ts":
             raise ValueError(f"contract source must contain real TypeScript files: {path}")
-        name = path.relative_to(source).as_posix()
-        names.append(name)
+        paths[path.relative_to(source).as_posix()] = path
+    return paths
+
+
+def contract_files(source: Path, dependencies: dict[str, Path]) -> dict[str, Path]:
+    files = source_files(source)
+    for slug, root in dependencies.items():
+        for name, path in source_files(root).items():
+            name = f"features/{slug}/{name}"
+            if name in files:
+                raise ValueError(f"duplicate contract file: {name}")
+            files[name] = path
+    return files
+
+
+def digest_files(files: dict[str, Path]) -> tuple[str, list[str]]:
+    names = sorted(files)
+    digest = hashlib.sha256()
+    for name in names:
         digest.update(name.encode())
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        digest.update(files[name].read_bytes())
         digest.update(b"\0")
     return digest.hexdigest(), names
+
+
+def contract_digest(source: Path) -> tuple[str, list[str]]:
+    return digest_files(source_files(source))
 
 
 def check_app(runtime: Path, frontends: Path, app: str) -> dict[str, object]:
@@ -109,9 +129,8 @@ def check_app(runtime: Path, frontends: Path, app: str) -> dict[str, object]:
     frontends = frontends.resolve(strict=True)
     app_root = frontends / "apps" / app
     manifest = read_json(app_root / "founder-village-app.json")
-    registration = next(
-        item for item in read_json(runtime / "config/frontends.json") if item["id"] == app
-    )
+    catalog = {item["id"]: item for item in read_json(runtime / "config/frontends.json")}
+    registration = catalog[app]
     application = next(
         item
         for item in read_json(runtime / "config/applications.json")
@@ -122,8 +141,10 @@ def check_app(runtime: Path, frontends: Path, app: str) -> dict[str, object]:
     assertions = {
         "manifest slug": manifest["slug"] == app,
         "pages origin": manifest["productionOrigin"] == expected_origin,
+        "exact custom origin": manifest.get("customOrigin") == registration.get("customOrigin"),
         "runtime pages origin": registration["productionOrigin"] == expected_origin,
         "application mapping": manifest["application"] == registration["application"],
+        "feature mappings": manifest.get("featureFrontends", []) == registration.get("featureFrontends", []),
         "application database identity": application["database"] == manifest["application"],
         "exact Hasura source": application["hasuraSource"] == manifest["application"],
         "contract source": manifest["contractSource"] == expected_source,
@@ -142,7 +163,9 @@ def check_app(runtime: Path, frontends: Path, app: str) -> dict[str, object]:
         }
     )
     source = runtime / expected_source
-    sha256, files = contract_digest(source)
+    dependencies = {slug: runtime / catalog[slug]["contractSource"] for slug in registration.get("featureFrontends", [])}
+    expected_files = contract_files(source, dependencies)
+    sha256, files = digest_files(expected_files)
     generated = app_root / "src/generated/contracts"
     marker = read_json(generated / "contract-source.json")
     assertions.update(
@@ -152,7 +175,7 @@ def check_app(runtime: Path, frontends: Path, app: str) -> dict[str, object]:
             "contract marker digest": marker["sha256"] == sha256,
             "contract marker files": marker["files"] == files,
             "contract bytes": all(
-                (generated / name).read_bytes() == (source / name).read_bytes()
+                (generated / name).read_bytes() == expected_files[name].read_bytes()
                 for name in files
             ),
         }

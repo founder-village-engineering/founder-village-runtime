@@ -23,6 +23,7 @@
     "workers": "tsx services/workers/main.ts",
     "migrate": "tsx packages/database/migrate.ts",
     "hasura": "tsx scripts/hasura.ts",
+    "team:login": "node --env-file=.state/local.env --import tsx scripts/team-login.ts",
     "local:seed": "tsx scripts/seed.ts",
     "security:scan": "node scripts/security-scan.ts",
     "release:verify": "node scripts/release-verify.ts",
@@ -35,7 +36,8 @@
     "frontend-contracts:watch": "node --import tsx scripts/sync-frontend-contracts.ts --watch",
     "format:check": "prettier --check \"packages/**/*.ts\" \"services/**/*.{ts,tsx,css,html,json}\" \"scripts/**/*.ts\" \"tests/**/*.ts\" \"*.json\" \"config/*.json\" \"hasura/**/*.json\" \"policies/*.json\" \".github/**/*.yml\" playwright.config.ts",
     "format": "prettier --write \"packages/**/*.ts\" \"services/**/*.{ts,tsx,css,html,json}\" \"scripts/**/*.ts\" \"tests/**/*.ts\" \"*.json\" \"config/*.json\" \"hasura/**/*.json\" \"policies/*.json\" \".github/**/*.yml\" playwright.config.ts",
-    "security:admin": "NODE_EXTRA_CA_CERTS=.state/local/edge/root.crt node --use-system-ca --env-file=.state/local.env --import tsx scripts/red-blue-admin.ts"
+    "security:admin": "NODE_EXTRA_CA_CERTS=.state/local/edge/root.crt node --use-system-ca --env-file=.state/local.env --import tsx scripts/red-blue-admin.ts",
+    "test:browser:team": "npm --prefix ../founder-village-frontends run pages -- plan --app founder-village-team && mkdir -p .state/team-browser-dist && cp -R ../founder-village-frontends/apps/founder-village-team/dist/. .state/team-browser-dist/ && playwright test --config tests/team-browser/playwright.config.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1169.0",

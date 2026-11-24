@@ -167,26 +167,44 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
         }
         for (key, value) in fv_config::env_read(&external)? {
             ensure!(
-                key == "OIDC_MFA_ACR"
-                    || [
-                        "CF_",
-                        "CLOUDFLARE_",
-                        "BACKUP_S3_",
-                        "IMMUTABLE_",
-                        "AUDIT_",
-                        "OBJECT_",
-                        "ALERT_",
-                        "ACCESS_ADMIN_",
-                        "AGE_",
-                        "MEMBERS_",
-                    ]
-                    .iter()
-                    .any(|prefix| key.starts_with(prefix)),
+                matches!(
+                    key.as_str(),
+                    "OIDC_MFA_ACR" | "TEAM_CONTENT_KEY" | "TEAM_XAI_MODEL" | "TEAM_XAI_API_KEY"
+                ) || [
+                    "CF_",
+                    "CLOUDFLARE_",
+                    "BACKUP_S3_",
+                    "IMMUTABLE_",
+                    "AUDIT_",
+                    "OBJECT_",
+                    "ALERT_",
+                    "ACCESS_ADMIN_",
+                    "AGE_",
+                    "MEMBERS_",
+                ]
+                .iter()
+                .any(|prefix| key.starts_with(prefix)),
                 "unknown external secret key"
             );
             ensure!(!value.contains(['\n', '\r']), "invalid external secret");
+            if key == "TEAM_CONTENT_KEY" {
+                ensure!(
+                    e.get(&key).is_none_or(|existing| existing == &value),
+                    "changing the Team content key requires re-encrypting existing data"
+                );
+            }
             e.insert(key, value);
         }
+    }
+    if c.environment == "local" {
+        e.entry("TEAM_CONTENT_KEY".into())
+            .or_insert_with(random_secret);
+    }
+    if let Some(key) = e.get("TEAM_CONTENT_KEY") {
+        ensure!(
+            key.len() == 64 && key.bytes().all(|b| b.is_ascii_hexdigit()),
+            "invalid Team content key"
+        );
     }
     // A catalog can supply credentials; the validated manifest owns routing,
     // identity settings and the scope of provider access.
@@ -350,7 +368,14 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
     private_write(&dir.join("postgres/pgbackrest.conf"), pgbackrest.as_bytes())?;
     let mut api_env = serde_json::Map::new();
     for (key, value) in &e {
-        if key.starts_with("OBJECT_") || key.starts_with("OTEL_") || key.starts_with("MEMBERS_") {
+        if key.starts_with("OBJECT_")
+            || key.starts_with("OTEL_")
+            || key.starts_with("MEMBERS_")
+            || matches!(
+                key.as_str(),
+                "TEAM_CONTENT_KEY" | "TEAM_XAI_MODEL" | "TEAM_XAI_API_KEY"
+            )
+        {
             api_env.insert(key.clone(), json!(value));
         }
     }

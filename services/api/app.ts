@@ -25,6 +25,8 @@ import { unversionedPublicApiContract } from "../../packages/contracts/api-versi
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { server } from "../../packages/observability/index.ts";
 import { installFrontendCors } from "./cors.ts";
+import { registerTeamRoutes } from "./team/routes.ts";
+import { applicationId as teamApplicationId } from "../../packages/frontend-contracts/founder-village-team/index.ts";
 import { registerFoodDeliveryRoutes } from "./food-deliveries.ts";
 import { MemberPayments } from "./members/payments.ts";
 import {
@@ -65,6 +67,8 @@ export async function api(databases: Record<string, pg.Pool> | pg.Pool) {
   // gets a separate registrar and must not alter v1 behavior in place.
   const registerV1Routes = (routes: FastifyInstance) => {
     registerFoodDeliveryRoutes(routes, all);
+    const teamDb = all[teamApplicationId];
+    if (teamDb) registerTeamRoutes(routes, teamDb);
     if (membersDb && payments)
       registerMemberRoutes(routes, membersDb, payments);
     routes.get("/records", async (req) => {

@@ -21,6 +21,7 @@ export type Order = {
   reference: string | null;
   stripe_session: string | null;
   payment_id: string | null;
+  return_origin: string | null;
   created_at: Date;
   expires_at: Date;
 };

@@ -43,6 +43,11 @@ test("frontend registry binds each app to its exact Pages and local origins", ()
   );
   assert(originAllowed(foundersApplicationId, delivery.productionOrigin));
   assert(registeredOrigin("https://food-deliveries.fv"));
+  const teamOrigin = "https://team.foundervillage.xyz";
+  assert(originAllowed("founder-village-team", teamOrigin));
+  assert(!originAllowed(foundersApplicationId, teamOrigin));
+  assert(!registeredOrigin("https://other.team.foundervillage.xyz"));
+  assert(!registeredOrigin("https://team.foundervillage.xyz.example.test"));
   for (const lookalike of [
     "https://evil.founder-food-deliveries.pages.dev",
     "https://founder-food-deliveries.pages.dev.evil.test",
@@ -71,6 +76,39 @@ test("food delivery inputs reject unknown fields and malformed expenses", () => 
     { ...valid, admin: true },
   ])
     assert.equal(foodDeliveryInputSchema.safeParse(invalid).success, false);
+});
+
+test("the primary surface is confined to each feature's registered routes", () => {
+  for (const origin of [
+    "https://founder-village-app.pages.dev",
+    "https://app.fv",
+    "http://127.0.0.1:43913",
+  ]) {
+    for (const [application, path] of [
+      ["founder-village-members", "/v1/members/directory?q=garden"],
+      [foundersApplicationId, "/food-deliveries/tenants"],
+      ["founder-village-team", "/v1/team/engineering/items"],
+      ["founder-village-team", "/v1/team/conversations/123/messages"],
+    ] as const) {
+      assert(registeredOrigin(origin, path));
+      assert(originAllowed(application, origin, path));
+      assert(!originAllowed("founder-village", origin, path));
+    }
+    for (const path of [
+      "/v1/records",
+      "/graphql",
+      "/v1/team/local-login",
+      "/v1/members/webhooks/stripe",
+    ])
+      assert(!registeredOrigin(origin, path));
+    assert(!originAllowed("founder-village-team", origin, "/v1/members/me"));
+  }
+  assert(
+    !registeredOrigin(
+      "https://branch.founder-village-app.pages.dev",
+      "/v1/team/tenants",
+    ),
+  );
 });
 
 test("API preflights only registered origins and preserves denial headers", async (t) => {

@@ -587,6 +587,32 @@
           "use_prepared_statements": true
         }
       }
+    },
+    {
+      "name": "founder-village-team",
+      "kind": "postgres",
+      "customization": {
+        "root_fields": {
+          "namespace": "founder_village_team"
+        },
+        "type_names": {
+          "prefix": "founder_village_team_"
+        }
+      },
+      "tables": [],
+      "configuration": {
+        "connection_info": {
+          "database_url": {
+            "from_env": "HASURA_FOUNDER_VILLAGE_TEAM_DATABASE_URL"
+          },
+          "pool_settings": {
+            "max_connections": 5,
+            "idle_timeout": 60
+          },
+          "isolation_level": "read-committed",
+          "use_prepared_statements": true
+        }
+      }
     }
   ]
 }

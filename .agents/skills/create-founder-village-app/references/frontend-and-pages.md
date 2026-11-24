@@ -24,3 +24,5 @@ The release path is:
 8. verify the canonical `https://<project>.pages.dev` response and security headers.
 
 Keep provisioning separate from deployment so a typo cannot silently create a similarly named project. Use `npm run pages -- <operation> --app <slug>` or the manual GitHub workflow; do not add per-app shell release scripts.
+
+For an app with an approved alias, set the identical optional `customOrigin` on the app manifest and runtime registration. It must be one HTTPS label below `foundervillage.xyz`. Register its exact callback and token origin, associate it with the Pages project, and verify the authoritative DNS CNAME. The shared release verifier checks both origins when an alias is present.

@@ -11,6 +11,7 @@ import {
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  featureFrontends,
   frontends,
   type FrontendApplication,
 } from "../packages/frontends/index.ts";
@@ -70,11 +71,8 @@ async function filesUnder(root: string, current = root): Promise<string[]> {
   return nested.flat();
 }
 
-async function sourceBundle(frontend: FrontendApplication): Promise<{
-  files: SourceFile[];
-  snapshot: Snapshot;
-}> {
-  const sourceRoot = resolve(runtimeRoot, frontend.contractSource);
+async function readSource(source: string, prefix = ""): Promise<SourceFile[]> {
+  const sourceRoot = resolve(runtimeRoot, source);
   await assertNoSymlinkPath(runtimeRoot, sourceRoot);
   const paths = await filesUnder(sourceRoot);
   const files: SourceFile[] = [];
@@ -84,13 +82,33 @@ async function sourceBundle(frontend: FrontendApplication): Promise<{
     const relativePath = relative(sourceRoot, path).split(sep).join("/");
     if (!relativePath || relativePath.startsWith("../"))
       throw new Error("contract source escaped its root");
-    files.push({ relativePath, content: await readFile(path) });
+    files.push({
+      relativePath: `${prefix}${relativePath}`,
+      content: await readFile(path),
+    });
   }
   if (files.length === 0)
     throw new Error(`empty contract source: ${sourceRoot}`);
-  files.sort((left, right) =>
-    left.relativePath.localeCompare(right.relativePath),
-  );
+  return files;
+}
+
+async function sourceBundle(frontend: FrontendApplication): Promise<{
+  files: SourceFile[];
+  snapshot: Snapshot;
+}> {
+  const bundles = await Promise.all([
+    readSource(frontend.contractSource),
+    ...featureFrontends(frontend).map((feature) =>
+      readSource(feature.contractSource, `features/${feature.id}/`),
+    ),
+  ]);
+  const ordered = new Map<string, SourceFile>();
+  for (const file of bundles.flat()) {
+    if (ordered.has(file.relativePath))
+      throw new Error(`duplicate contract file: ${file.relativePath}`);
+    ordered.set(file.relativePath, file);
+  }
+  const files = [...ordered.keys()].sort().map((key) => ordered.get(key)!);
   const digest = createHash("sha256");
   for (const file of files) {
     digest.update(file.relativePath);
@@ -219,26 +237,30 @@ async function writeOne(
   await removeEmptyDirectories(target);
 }
 
-export async function validateContractSources(): Promise<void> {
-  for (const frontend of frontends) await sourceBundle(frontend);
+export async function validateContractSources(
+  selected = frontends,
+): Promise<void> {
+  for (const frontend of selected) await sourceBundle(frontend);
 }
 
 export async function checkContractCopies(
   frontendsRoot: string,
+  selected = frontends,
 ): Promise<void> {
   const stat = await lstat(resolve(frontendsRoot));
   if (!stat.isDirectory() || stat.isSymbolicLink())
     throw new Error("frontend root must be a real directory");
-  for (const frontend of frontends) await checkOne(frontendsRoot, frontend);
+  for (const frontend of selected) await checkOne(frontendsRoot, frontend);
 }
 
 export async function writeContractCopies(
   frontendsRoot: string,
+  selected = frontends,
 ): Promise<void> {
   const stat = await lstat(resolve(frontendsRoot));
   if (!stat.isDirectory() || stat.isSymbolicLink())
     throw new Error("frontend root must be a real directory");
-  for (const frontend of frontends) await writeOne(frontendsRoot, frontend);
+  for (const frontend of selected) await writeOne(frontendsRoot, frontend);
 }
 
 function argument(name: string): string | undefined {
@@ -261,24 +283,29 @@ async function main(): Promise<void> {
   const frontendsRoot = resolve(
     argument("--frontends-root") ?? "../founder-village-frontends",
   );
+  const slug = argument("--app");
+  const selected = slug
+    ? frontends.filter((frontend) => frontend.id === slug)
+    : frontends;
+  if (!selected.length) throw new Error("unknown frontend for contract sync");
   if (modes[0] === "--validate") {
-    await validateContractSources();
-    console.log(`validated ${frontends.length} frontend contract source(s)`);
+    await validateContractSources(selected);
+    console.log(`validated ${selected.length} frontend contract source(s)`);
     return;
   }
   if (modes[0] === "--check") {
-    await checkContractCopies(frontendsRoot);
+    await checkContractCopies(frontendsRoot, selected);
     console.log(
-      `verified ${frontends.length} generated frontend contract copy/copies`,
+      `verified ${selected.length} generated frontend contract copy/copies`,
     );
     return;
   }
-  await writeContractCopies(frontendsRoot);
-  console.log(`synchronized ${frontends.length} frontend contract copy/copies`);
+  await writeContractCopies(frontendsRoot, selected);
+  console.log(`synchronized ${selected.length} frontend contract copy/copies`);
   if (modes[0] !== "--watch") return;
   let fingerprints = JSON.stringify(
     await Promise.all(
-      frontends.map(
+      selected.map(
         async (frontend) => (await sourceBundle(frontend)).snapshot.sha256,
       ),
     ),
@@ -287,13 +314,13 @@ async function main(): Promise<void> {
     void (async () => {
       const next = JSON.stringify(
         await Promise.all(
-          frontends.map(
+          selected.map(
             async (frontend) => (await sourceBundle(frontend)).snapshot.sha256,
           ),
         ),
       );
       if (next === fingerprints) return;
-      await writeContractCopies(frontendsRoot);
+      await writeContractCopies(frontendsRoot, selected);
       fingerprints = next;
       console.log("frontend contract change synchronized");
     })().catch((error: unknown) => {

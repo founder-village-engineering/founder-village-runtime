@@ -46,7 +46,7 @@ export function installFrontendCors(app: FastifyInstance): void {
         .map((value) => value.trim().toLowerCase())
         .filter(Boolean);
       if (
-        !registeredOrigin(origin) ||
+        !registeredOrigin(origin, request.url) ||
         typeof requestedMethod !== "string" ||
         !methods.has(requestedMethod.toUpperCase()) ||
         requestedHeaders.some((value) => !headers.has(value))
@@ -57,7 +57,10 @@ export function installFrontendCors(app: FastifyInstance): void {
       return reply;
     }
     const application = request.headers["x-application-id"];
-    if (typeof application !== "string" || !originAllowed(application, origin))
+    if (
+      typeof application !== "string" ||
+      !originAllowed(application, origin, request.url)
+    )
       denied(403);
     apply(reply, origin);
   });

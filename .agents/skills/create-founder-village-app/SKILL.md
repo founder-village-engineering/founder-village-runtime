@@ -29,9 +29,12 @@ Confirm the frontend slug, title, owner, purpose, one-label `.fv` hostname, unus
 
 Copy `assets/project.example.json` into an ignored path such as `founder-village-frontends/.state/new-apps/<slug>.json` and edit the copy. Runtime onboarding deliberately requires the manifest to remain inside the frontend repository. Keep:
 
+- an optional `customOrigin` for a requested one-label HTTPS alias under `foundervillage.xyz`, registered with Pages, DNS and OIDC;
 - `productionOrigin` equal to `https://<pagesProject>.pages.dev`;
 - `contractSource` equal to `packages/frontend-contracts/<slug>`;
 - the frontend slug, application mapping, database/Hasura source, frontend path, and generated contract ownership explicit.
+
+For a frontend that combines existing product areas, list their registered standalone frontend IDs in `featureFrontends`. The runtime must define the exact route group for each feature. These entries reuse the feature databases, preserve the route authorization, and bundle the source contracts under `features/<frontend-id>/`.
 
 See `references/workspace-map.md` for ownership and `references/verification-and-release.md` for proof boundaries.
 
@@ -87,6 +90,10 @@ Never hand-edit `apps/<slug>/src/generated/contracts/`. Synchronize after every 
 # one shot
 npm run frontend-contracts:sync -- \
   --frontends-root ../founder-village-frontends
+
+# only the requested frontend and its contract dependencies
+npm run frontend-contracts:sync -- \
+  --frontends-root ../founder-village-frontends --app <slug>
 
 # during active runtime work
 npm run frontend-contracts:watch -- \

@@ -140,7 +140,12 @@ export class MemberPayments {
     });
   }
 
-  async start(actor: string, method: PaymentMethod, key: string) {
+  async start(
+    actor: string,
+    method: PaymentMethod,
+    key: string,
+    origin?: string,
+  ) {
     const order = await memberContext(this.database, actor, async (client) => {
       const profile = await requireProfile(client, true);
       const {
@@ -163,14 +168,17 @@ export class MemberPayments {
       const units = this.settings.amounts[method];
       if (!units) denied(503);
       const card = method === "card";
+      const returnOrigin = card
+        ? this.settings.stripe?.registeredOrigin(origin)
+        : undefined;
       const expiresAt = new Date(
         Math.floor(Date.now() / 1000) * 1000 + (card ? 35 : 20) * 60_000,
       );
       const {
         rows: [created],
       } = await client.query<Order>(
-        `INSERT INTO app.member_checkouts(id,member_id,request_key,method,amount_units,test,recipient,reference,expires_at)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        `INSERT INTO app.member_checkouts(id,member_id,request_key,method,amount_units,test,recipient,reference,expires_at,return_origin)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
         [
           randomUUID(),
           profile.id,
@@ -181,6 +189,7 @@ export class MemberPayments {
           card ? null : this.settings.solana!.recipient,
           card ? null : newReference(),
           expiresAt,
+          returnOrigin ?? null,
         ],
       );
       return created!;

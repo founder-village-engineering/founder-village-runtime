@@ -1,6 +1,7 @@
 import Stripe from "stripe";
 import { z } from "zod";
 import { denied } from "../../../packages/auth/index.ts";
+import { frontends, originAllowed } from "../../../packages/frontends/index.ts";
 import {
   applicationId,
   checkoutActionSchema,
@@ -83,8 +84,22 @@ export class StripePayments {
     });
   }
 
+  registeredOrigin(origin?: string | null) {
+    if (!origin || !originAllowed(applicationId, origin, "/members/checkout"))
+      return undefined;
+    const allowed = frontends.some((frontend) =>
+      process.env.FV_ENV === "local"
+        ? frontend.localOrigins.includes(origin)
+        : frontend.productionOrigin === origin ||
+          frontend.customOrigin === origin,
+    );
+    return allowed ? origin : undefined;
+  }
+
   create(order: Order) {
     const metadata = stripeMetadata(order);
+    // A replay must use the same destination even when reopened on another surface.
+    const origin = this.registeredOrigin(order.return_origin) ?? this.origin;
     return this.client.checkout.sessions.create(
       {
         mode: "payment",
@@ -105,8 +120,8 @@ export class StripePayments {
           },
         ],
         expires_at: Math.floor(order.expires_at.valueOf() / 1000),
-        success_url: `${this.origin}/?checkout=return`,
-        cancel_url: `${this.origin}/?checkout=cancelled`,
+        success_url: `${origin}/?checkout=return`,
+        cancel_url: `${origin}/?checkout=cancelled`,
       },
       { idempotencyKey: order.id },
     );

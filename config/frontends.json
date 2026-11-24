@@ -16,5 +16,29 @@
     "localOrigins": ["https://members.fv", "http://127.0.0.1:43911"],
     "frontendPath": "apps/founder-village-members",
     "contractSource": "packages/frontend-contracts/founder-village-members"
+  },
+  {
+    "id": "founder-village-team",
+    "application": "founder-village-team",
+    "pagesProject": "founder-village-team",
+    "productionOrigin": "https://founder-village-team.pages.dev",
+    "customOrigin": "https://team.foundervillage.xyz",
+    "localOrigins": ["https://team.fv", "http://127.0.0.1:43912"],
+    "frontendPath": "apps/founder-village-team",
+    "contractSource": "packages/frontend-contracts/founder-village-team"
+  },
+  {
+    "id": "founder-village-app",
+    "application": "founder-village-members",
+    "pagesProject": "founder-village-app",
+    "productionOrigin": "https://founder-village-app.pages.dev",
+    "localOrigins": ["https://app.fv", "http://127.0.0.1:43913"],
+    "frontendPath": "apps/founder-village-app",
+    "contractSource": "packages/frontend-contracts/founder-village-app",
+    "featureFrontends": [
+      "founder-village-members",
+      "founder-food-deliveries",
+      "founder-village-team"
+    ]
   }
 ]

@@ -18,17 +18,45 @@ const origin = z
     );
   }, "origin must contain only scheme, host, and optional port");
 
+export const customOriginSchema = z
+  .string()
+  .regex(/^https:\/\/[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?\.foundervillage\.xyz$/);
+
+const featureIds = [
+  "founder-food-deliveries",
+  "founder-village-members",
+  "founder-village-team",
+] as const;
+const featureRoutes: Record<(typeof featureIds)[number], RegExp> = {
+  "founder-food-deliveries":
+    /^\/(?:food-deliveries(?:\/tenants)?|founders\/me|expenses)$/,
+  "founder-village-members":
+    /^\/members\/(?:me|profile|delete|membership|directory(?:\/[^/]+\/whatsapp)?|checkout(?:\/[^/]+\/(?:open|check|cancel))?)$/,
+  "founder-village-team":
+    /^\/team\/(?:tenants|capabilities|bots(?:\/[^/]+)?|conversations(?:\/[^/]+(?:\/messages(?:\/[^/]+\/content)?|\/replies)?)?|engineering\/items(?:\/[^/]+\/status)?)$/,
+};
+
+export const featureFrontendsSchema = z
+  .array(z.enum(featureIds))
+  .min(1)
+  .refine(
+    (ids) => new Set(ids).size === ids.length,
+    "duplicate feature frontend",
+  );
+
 export const frontendSchema = z
   .object({
     id: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
     application: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
     pagesProject: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
     productionOrigin: origin,
+    customOrigin: customOriginSchema.optional(),
     localOrigins: z.array(origin).min(1),
     frontendPath: z.string().regex(/^apps\/[a-z][a-z0-9-]{0,62}$/),
     contractSource: z
       .string()
       .regex(/^packages\/frontend-contracts\/[a-z][a-z0-9-]{0,62}$/),
+    featureFrontends: featureFrontendsSchema.optional(),
   })
   .strict();
 
@@ -53,6 +81,31 @@ const contractSources = new Set<string>();
 const origins = new Set<string>();
 const applicationsById = new Set(applications.map((entry) => entry.id));
 
+function frontendOrigins(frontend: FrontendApplication) {
+  return [
+    frontend.productionOrigin,
+    ...(frontend.customOrigin ? [frontend.customOrigin] : []),
+    ...frontend.localOrigins,
+  ];
+}
+
+export function featureFrontends(frontend: FrontendApplication) {
+  const sources = (frontend.featureFrontends ?? []).map((id) => {
+    const source = frontends.find((entry) => entry.id === id);
+    if (!source || source.id === frontend.id || source.featureFrontends)
+      throw new Error(
+        "feature must reference a registered standalone frontend",
+      );
+    return source;
+  });
+  if (
+    sources.length &&
+    !sources.some((source) => source.application === frontend.application)
+  )
+    throw new Error("integrated frontend must include its primary application");
+  return sources;
+}
+
 for (const frontend of frontends) {
   if (
     ids.has(frontend.id) ||
@@ -69,6 +122,7 @@ for (const frontend of frontends) {
     throw new Error("frontend references unknown application");
   if (frontend.contractSource !== `packages/frontend-contracts/${frontend.id}`)
     throw new Error("frontend contract source must match frontend id");
+  featureFrontends(frontend);
   const production = new URL(frontend.productionOrigin);
   if (
     production.protocol !== "https:" ||
@@ -93,7 +147,7 @@ for (const frontend of frontends) {
         "frontend local origin must be one-label .fv HTTPS or loopback HTTP",
       );
   }
-  for (const value of [frontend.productionOrigin, ...frontend.localOrigins]) {
+  for (const value of frontendOrigins(frontend)) {
     if (origins.has(value)) throw new Error("frontend origins must be unique");
     origins.add(value);
   }
@@ -102,16 +156,43 @@ for (const frontend of frontends) {
 export function originAllowed(
   application: string,
   originValue: string,
+  requestPath?: string,
 ): boolean {
-  return frontends.some(
-    (frontend) =>
-      frontend.application === application &&
-      [frontend.productionOrigin, ...frontend.localOrigins].includes(
-        originValue,
-      ),
+  const frontend = frontends.find((entry) =>
+    frontendOrigins(entry).includes(originValue),
+  );
+  if (!frontend) return false;
+  if (!frontend.featureFrontends) return frontend.application === application;
+  return (
+    !!requestPath && grantsFeatureRoute(frontend, requestPath, application)
   );
 }
 
-export function registeredOrigin(originValue: string): boolean {
-  return origins.has(originValue);
+function grantsFeatureRoute(
+  frontend: FrontendApplication,
+  requestPath: string,
+  application?: string,
+) {
+  const path = requestPath.split("?", 1)[0]!.replace(/^\/v1(?=\/)/, "");
+  return (frontend.featureFrontends ?? []).some(
+    (id) =>
+      featureRoutes[id].test(path) &&
+      (application === undefined ||
+        frontends.find((source) => source.id === id)?.application ===
+          application),
+  );
+}
+
+export function registeredOrigin(
+  originValue: string,
+  requestPath?: string,
+): boolean {
+  if (!requestPath) return origins.has(originValue);
+  const frontend = frontends.find((entry) =>
+    frontendOrigins(entry).includes(originValue),
+  );
+  return (
+    !!frontend &&
+    (!frontend.featureFrontends || grantsFeatureRoute(frontend, requestPath))
+  );
 }

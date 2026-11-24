@@ -20,6 +20,7 @@ import {
 } from "../packages/queue/index.ts";
 import { migrate } from "../packages/database/migrate.ts";
 import { applicationId as membersApplicationId } from "../packages/frontend-contracts/founder-village-members/index.ts";
+import { exerciseTeam } from "./team-integration.ts";
 import { exerciseMembers } from "./members-integration.ts";
 if (!local()) throw new Error("Integration fixtures are local-only");
 process.env.FV_LOCAL_AUTH_FIXTURES = "1";
@@ -41,6 +42,15 @@ try {
   await migrate(migration, "app");
   await migrate(cm, "control");
   proof.push("migrations repeat without drift");
+  const teamMigration = pool("MIGRATION_FOUNDER_VILLAGE_TEAM_DATABASE_URL");
+  try {
+    await exerciseTeam(namespaces["founder-village-team"]!, teamMigration);
+    proof.push(
+      "team bot ACL, encrypted private chat and engineering history, work item conflicts, ordered pagination, idempotent provider fixture, and revoked access",
+    );
+  } finally {
+    await teamMigration.end();
+  }
   await exerciseMembers(namespaces[membersApplicationId]!);
   proof.push(
     "member signup, contact consent, ownership, checkout replay, verified Stripe/SOL/USDC settlement, and deletion",
@@ -195,8 +205,12 @@ try {
   );
   const delivery = await app.inject({
     method: "POST",
-    url: "/food-deliveries",
-    headers: { ...deliveryHeaders, "idempotency-key": deliveryKey },
+    url: "/v1/food-deliveries",
+    headers: {
+      ...deliveryHeaders,
+      origin: "http://127.0.0.1:43913",
+      "idempotency-key": deliveryKey,
+    },
     payload: deliveryPayload,
   });
   assert.equal(delivery.statusCode, 201, delivery.body);

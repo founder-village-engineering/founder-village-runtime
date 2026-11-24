@@ -8,7 +8,13 @@ import {
   applicationSchema,
   applications,
 } from "../packages/database/applications.ts";
-import { frontendSchema, frontends } from "../packages/frontends/index.ts";
+import {
+  customOriginSchema,
+  featureFrontends,
+  featureFrontendsSchema,
+  frontendSchema,
+  frontends,
+} from "../packages/frontends/index.ts";
 
 const run = promisify(execFile);
 const runtimeRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -24,11 +30,13 @@ const manifestSchema = z
     application: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
     pagesProject: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
     productionOrigin: z.string().url(),
+    customOrigin: customOriginSchema.optional(),
     localOrigin: z.string().url(),
     localPort: z.number().int().min(1024).max(65535),
     contractSource: z
       .string()
       .regex(/^packages\/frontend-contracts\/[a-z][a-z0-9-]{0,62}$/),
+    featureFrontends: featureFrontendsSchema.optional(),
   })
   .strict();
 
@@ -123,13 +131,18 @@ async function desired(manifestPath: string, frontendsRoot: string) {
     application: manifest.application,
     pagesProject: manifest.pagesProject,
     productionOrigin: manifest.productionOrigin,
+    ...(manifest.customOrigin ? { customOrigin: manifest.customOrigin } : {}),
     localOrigins: [
       manifest.localOrigin,
       `http://127.0.0.1:${manifest.localPort}`,
     ],
     frontendPath: `apps/${manifest.slug}`,
     contractSource: manifest.contractSource,
+    ...(manifest.featureFrontends
+      ? { featureFrontends: manifest.featureFrontends }
+      : {}),
   });
+  featureFrontends(frontendEntry);
   return { root, manifest, local, appEntry, frontendEntry };
 }
 
@@ -236,6 +249,8 @@ async function apply(
       "--write",
       "--frontends-root",
       next.root,
+      "--app",
+      next.frontendEntry.id,
     ],
     { cwd: runtimeRoot },
   );

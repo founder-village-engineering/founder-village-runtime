@@ -217,7 +217,16 @@ fn service_env(
         }
     }
     if name == "api" {
-        keys.extend(["HASURA_URL", "HASURA_JWT_SECRET"].map(str::to_owned));
+        keys.extend(
+            [
+                "HASURA_URL",
+                "HASURA_JWT_SECRET",
+                "TEAM_CONTENT_KEY",
+                "TEAM_XAI_MODEL",
+                "TEAM_XAI_API_KEY",
+            ]
+            .map(str::to_owned),
+        );
         keys.extend(
             catalog
                 .keys()
@@ -469,6 +478,8 @@ mod tests {
             ("RUNNER_DATABASE_URL", "synthetic-runner"),
             ("DOCKER_HOST", "synthetic-socket"),
             ("MEMBERS_STRIPE_KEY", "synthetic-members-provider"),
+            ("TEAM_CONTENT_KEY", "synthetic-content"),
+            ("TEAM_XAI_API_KEY", "synthetic-provider"),
         ]
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
         .into();
@@ -477,7 +488,10 @@ mod tests {
         assert_eq!(vars["CF_READ_TOKEN"], "synthetic-read");
         let api = service_env(&root, "api", &catalog).unwrap();
         assert_eq!(api["MEMBERS_STRIPE_KEY"], "synthetic-members-provider");
+        assert_eq!(api["TEAM_CONTENT_KEY"], "synthetic-content");
         for key in [
+            "TEAM_CONTENT_KEY",
+            "TEAM_XAI_API_KEY",
             "CF_WRITE_TOKEN",
             "BACKUP_S3_SECRET",
             "RUNNER_DATABASE_URL",

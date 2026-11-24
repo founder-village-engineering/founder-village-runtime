@@ -31,6 +31,7 @@ const signature = () => bs58.encode(randomBytes(64));
 export async function exerciseMembers(database: pg.Pool) {
   if (!local()) throw new Error("members integration is local-only");
   const stripeSession = `cs_test_members_fixture_${randomUUID()}`;
+  const portalOrigin = "http://127.0.0.1:43913";
   const stripeIntent = `pi_members_fixture_${randomUUID()}`;
   const previous = Object.fromEntries(
     Object.keys(settings).map((key) => [key, process.env[key]]),
@@ -98,6 +99,16 @@ export async function exerciseMembers(database: pg.Pool) {
           "2500",
         );
         assert.equal(body.get("allowed_payment_method_types[0]"), "card");
+        if (providerCreates === 1) {
+          assert.equal(
+            body.get("success_url"),
+            `${portalOrigin}/?checkout=return`,
+          );
+          assert.equal(
+            body.get("cancel_url"),
+            `${portalOrigin}/?checkout=cancelled`,
+          );
+        }
       } else
         assert.equal(url.pathname, `/v1/checkout/sessions/${stripeSession}`);
       return Response.json(session());
@@ -249,7 +260,7 @@ export async function exerciseMembers(database: pg.Pool) {
       requests.map((key) =>
         inject(
           "checkout",
-          { ...one, "idempotency-key": key },
+          { ...one, origin: portalOrigin, "idempotency-key": key },
           { method: "card" },
         ),
       ),
