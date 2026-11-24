@@ -1,0 +1,4 @@
+interface:
+  display_name: "Delete Founder Village App"
+  short_description: "Retire an app and its owned resources"
+  default_prompt: "Use $delete-founder-village-app to inventory and retire a named Founder Village app across its code, data, hosting, and caches."
