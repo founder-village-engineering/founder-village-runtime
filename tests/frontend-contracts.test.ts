@@ -10,11 +10,8 @@ import {
   originAllowed,
   registeredOrigin,
 } from "../packages/frontends/index.ts";
-import {
-  foodDeliveriesFrontendId,
-  foodDeliveryInputSchema,
-  foundersApplicationId,
-} from "../packages/frontend-contracts/founder-food-deliveries/index.ts";
+import { applicationId } from "../packages/frontend-contracts/founder-village-app/index.ts";
+import { foodDeliveryInputSchema } from "../packages/frontend-contracts/founder-village-app/food-deliveries.ts";
 import { assertNoSymlinkPath } from "../scripts/sync-frontend-contracts.ts";
 
 test("contract synchronization refuses symlinked target ancestors", async (t) => {
@@ -32,29 +29,35 @@ test("contract synchronization refuses symlinked target ancestors", async (t) =>
 });
 
 test("frontend registry binds each app to its exact Pages and local origins", () => {
-  const delivery = frontends.find(
-    (entry) => entry.id === foodDeliveriesFrontendId,
-  );
-  assert(delivery);
-  assert.equal(delivery.application, foundersApplicationId);
+  assert.deepEqual(frontends.map((entry) => entry.id).sort(), [
+    applicationId,
+    "founder-village-team",
+  ]);
+  const primary = frontends.find((entry) => entry.id === applicationId);
+  assert(primary);
+  assert.equal(primary.application, applicationId);
   assert.equal(
-    delivery.productionOrigin,
-    "https://founder-food-deliveries.pages.dev",
+    primary.productionOrigin,
+    "https://founder-village-app.pages.dev",
   );
-  assert(originAllowed(foundersApplicationId, delivery.productionOrigin));
-  assert(registeredOrigin("https://food-deliveries.fv"));
+  assert(
+    originAllowed(applicationId, primary.productionOrigin, "/food-deliveries"),
+  );
+  assert(registeredOrigin("https://app.fv"));
+  assert(!registeredOrigin("https://food-deliveries.fv"));
+  assert(!registeredOrigin("https://members.fv"));
   const teamOrigin = "https://team.foundervillage.xyz";
   assert(originAllowed("founder-village-team", teamOrigin));
-  assert(!originAllowed(foundersApplicationId, teamOrigin));
+  assert(!originAllowed(applicationId, teamOrigin));
   assert(!registeredOrigin("https://other.team.foundervillage.xyz"));
   assert(!registeredOrigin("https://team.foundervillage.xyz.example.test"));
   for (const lookalike of [
-    "https://evil.founder-food-deliveries.pages.dev",
-    "https://founder-food-deliveries.pages.dev.evil.test",
-    "http://founder-food-deliveries.pages.dev",
+    "https://evil.founder-village-app.pages.dev",
+    "https://founder-village-app.pages.dev.evil.test",
+    "http://founder-village-app.pages.dev",
     "null",
   ]) {
-    assert(!originAllowed(foundersApplicationId, lookalike));
+    assert(!originAllowed(applicationId, lookalike));
     assert(!registeredOrigin(lookalike));
   }
 });
@@ -85,8 +88,8 @@ test("the primary surface is confined to each feature's registered routes", () =
     "http://127.0.0.1:43913",
   ]) {
     for (const [application, path] of [
-      ["founder-village-members", "/v1/members/directory?q=garden"],
-      [foundersApplicationId, "/food-deliveries/tenants"],
+      [applicationId, "/v1/members/directory?q=garden"],
+      [applicationId, "/food-deliveries/tenants"],
       ["founder-village-team", "/v1/team/engineering/items"],
       ["founder-village-team", "/v1/team/conversations/123/messages"],
     ] as const) {
@@ -123,9 +126,9 @@ test("API preflights only registered origins and preserves denial headers", asyn
       return { rows: [], rowCount: 0 };
     },
   } as unknown as pg.Pool;
-  const app = await api({ [foundersApplicationId]: database });
+  const app = await api({ [applicationId]: database });
   t.after(() => app.close());
-  const origin = "https://founder-food-deliveries.pages.dev";
+  const origin = "https://founder-village-app.pages.dev";
   const allowed = await app.inject({
     method: "OPTIONS",
     url: "/food-deliveries",
@@ -155,7 +158,7 @@ test("API preflights only registered origins and preserves denial headers", asyn
     url: "/food-deliveries",
     headers: {
       origin,
-      "x-application-id": foundersApplicationId,
+      "x-application-id": applicationId,
       "x-tenant-id": "11111111-1111-4111-8111-111111111111",
     },
   });

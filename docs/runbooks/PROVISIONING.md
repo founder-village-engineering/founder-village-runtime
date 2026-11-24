@@ -18,12 +18,17 @@ Complete the Cloudflare account, zone, team and exact managed API, admin, and SS
 manifest=config/staging.private.json
 bin/fv --config "$manifest" validate
 bin/fv --config "$manifest" provision plan
+bin/fv --config "$manifest" provision audit
 bin/fv --config "$manifest" provision status
 bin/fv --config "$manifest" provision apply
 bin/fv --config "$manifest" provision status
 ```
 
-Provide the correct Hetzner project's `HCLOUD_TOKEN` through the workstation secret store. Use a read-only token for status and a write token for applying. The bound path checks the server ID, name, IPv4, location, type, OS image, CPU architecture, ownership, and existing attachments before managing the firewall and private network. It reads back those attachments and enables Hetzner delete and rebuild protection. Resolve foreign attachments through their owners before adoption. In Tunnel SSH mode, the provider firewall allows only the temporary SSH source CIDRs during bootstrap. The final firewall has zero public inbound rules for IPv4 and IPv6. [Hetzner Cloud API](https://docs.hetzner.cloud/reference/cloud), [Hetzner Cloud Firewall behavior](https://docs.hetzner.com/cloud/firewalls/faq/)
+Supply a token issued inside the dedicated Founder Village project as `FV_HCLOUD_TOKEN` through the workstation secret store. Existing callers may supply `HCLOUD_TOKEN`; both paths undergo identical project checks. Use read-only credentials for audit and status. The audit uses the same Cloud API inventory checks that run before apply can write. It prints counts by resource class. Correctly scoped credentials must see the bound server and its declared keys, and must fail to see resources pinned to an independent project. [Hetzner project-scoped API tokens](https://docs.hetzner.com/cloud/api/getting-started/using-api/)
+
+The audit reads all pages of servers, registered SSH keys, firewalls, networks, primary and floating IPs, volumes, load balancers, placement groups, certificates, DNS zones, backups and snapshots. It recognizes the bound VM, its assigned IPs and volumes, images attributable to admitted servers, and the managed firewall and network. Declare any additional approved project resource by API collection name and numeric ID in the private `provider.project_resource_ids` object. For example, standalone snapshot IDs go under `snapshots`. Review the resource owner in the provider console before adding a binding. Keep the private manifest and IDs out of version control. Independent storage credentials and object-store access require their own checks.
+
+The bound path checks the server ID, name, IPv4, location, type, OS image, CPU architecture, ownership and attachments. It rejects foreign or selector-based firewall attachments, verifies the managed network, reads back the applied state, and enables delete and rebuild protection. A project containing another tenant must be separated by its owner before applying. Preserve independent console or authenticated private SSH access during a transfer. In Tunnel SSH mode the initial firewall allows the temporary SSH source CIDRs. The final firewall has zero public inbound rules for IPv4 and IPv6. [Hetzner project transfers](https://docs.hetzner.com/cloud/general/faq/) · [Cloud firewall behavior](https://docs.hetzner.com/cloud/firewalls/faq/)
 
 For a **new allocation**, omit `existing_server`, configure `provider.ssh_key_ids`, and use `provision apply --public-key /protected/operator.pub`. The provisioner resolves the correct Ubuntu system image before creating the server. Cloud-init creates the `fv` operator with the supplied Ed25519 key and disables root and password SSH. The private provider receipt in `.state/<environment>/provider.json` contains the allocated address.
 

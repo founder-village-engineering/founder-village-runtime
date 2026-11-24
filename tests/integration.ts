@@ -19,7 +19,7 @@ import {
   queueName,
 } from "../packages/queue/index.ts";
 import { migrate } from "../packages/database/migrate.ts";
-import { applicationId as membersApplicationId } from "../packages/frontend-contracts/founder-village-members/index.ts";
+import { applicationId as primaryApplicationId } from "../packages/frontend-contracts/founder-village-app/index.ts";
 import { exerciseTeam } from "./team-integration.ts";
 import { exerciseMembers } from "./members-integration.ts";
 if (!local()) throw new Error("Integration fixtures are local-only");
@@ -51,7 +51,7 @@ try {
   } finally {
     await teamMigration.end();
   }
-  await exerciseMembers(namespaces[membersApplicationId]!);
+  await exerciseMembers(namespaces[primaryApplicationId]!);
   proof.push(
     "member signup, contact consent, ownership, checkout replay, verified Stripe/SOL/USDC settlement, and deletion",
   );
@@ -175,7 +175,7 @@ try {
     deliveryHeaders = {
       authorization: "Bearer " + deliveryToken,
       "x-tenant-id": tid,
-      "x-application-id": "founders",
+      "x-application-id": primaryApplicationId,
     },
     deliveryKey = randomUUID(),
     deliveryPayload = {
@@ -188,12 +188,20 @@ try {
       serviceFeeCents: 300,
       expectedAt: new Date(Date.now() + 60 * 60_000).toISOString(),
     };
+  for (const retired of ["founder-village-members", "founders"]) {
+    const result = await app.inject({
+      url: "/v1/records",
+      headers: { ...deliveryHeaders, "x-application-id": retired },
+    });
+    assert.equal(result.statusCode, 400);
+  }
   const profileBefore = await app.inject({
     url: "/founders/me",
     headers: deliveryHeaders,
   });
   assert.equal(profileBefore.statusCode, 200, profileBefore.body);
   const founderBefore = profileBefore.json() as {
+    id: string;
     fullName: string;
     companies: Array<{ name: string }>;
     balance: { balanceCents: number };
@@ -203,6 +211,25 @@ try {
     founderBefore.companies.map((company) => company.name),
     ["Canopy Labs", "Open Courtyard"],
   );
+  const deliveryAccess = await app.inject({
+    url: "/food-deliveries/tenants",
+    headers: {
+      ...deliveryHeaders,
+      authorization: `Bearer ${await localToken(primaryApplicationId)}`,
+    },
+  });
+  assert.equal(deliveryAccess.statusCode, 200, deliveryAccess.body);
+  assert.deepEqual(deliveryAccess.json(), []);
+  const primaryGraphql = await app.inject({
+    method: "POST",
+    url: "/v1/graphql",
+    headers: deliveryHeaders,
+    payload: { query: "{ founder_village_app { app_members { id } } }" },
+  });
+  assert.equal(primaryGraphql.statusCode, 200, primaryGraphql.body);
+  assert.deepEqual(primaryGraphql.json().data.founder_village_app.app_members, [
+    { id: founderBefore.id },
+  ]);
   const delivery = await app.inject({
     method: "POST",
     url: "/v1/food-deliveries",

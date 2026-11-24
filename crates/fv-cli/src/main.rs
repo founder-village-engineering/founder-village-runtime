@@ -54,7 +54,7 @@ enum Cmd {
     BrokerUpgrade,
     QueueUpgrade,
     Provision {
-        #[arg(value_parser=["plan","apply","status"])]
+        #[arg(value_parser=["plan","apply","status","audit"])]
         action: String,
         #[arg(long)]
         public_key: Option<PathBuf>,
@@ -289,6 +289,7 @@ fn execute() -> Result<()> {
                 serde_json::to_string_pretty(&fv_provider::Hetzner::plan(&c))?
             ),
             "status" => println!("{}", fv_provider::Hetzner::new()?.status(&c)?),
+            "audit" => println!("{}", fv_provider::Hetzner::new()?.audit(&c)?),
             _ => {
                 if let Some(host) = &c.cloudflare.ssh_domain
                     && c.ssh_cidrs.is_empty()

@@ -5,13 +5,13 @@ import type Stripe from "stripe";
 import { z } from "zod";
 import { denied } from "../../../packages/auth/index.ts";
 import { frontends } from "../../../packages/frontends/index.ts";
+import { applicationId } from "../../../packages/frontend-contracts/founder-village-app/index.ts";
 import {
-  applicationId,
   type CheckoutResponse,
   type Membership,
   type Offer,
   type PaymentMethod,
-} from "../../../packages/frontend-contracts/founder-village-members/index.ts";
+} from "../../../packages/frontend-contracts/founder-village-app/members.ts";
 import { failure } from "../../../packages/observability/index.ts";
 import { newReference, solanaAction, SolanaPayments } from "./solana.ts";
 import { StripePayments, matchesSession, sessionPayment } from "./stripe.ts";

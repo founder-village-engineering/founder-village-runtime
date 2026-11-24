@@ -7,7 +7,7 @@ import {
 import bs58 from "bs58";
 import { z } from "zod";
 import { boundedJson } from "../../../packages/observability/http.ts";
-import { signatureSchema } from "../../../packages/frontend-contracts/founder-village-members/index.ts";
+import { signatureSchema } from "../../../packages/frontend-contracts/founder-village-app/members.ts";
 import { checkout, type Order } from "./store.ts";
 
 // Both fields are public identifiers. `genesis` is the Solana network hash,

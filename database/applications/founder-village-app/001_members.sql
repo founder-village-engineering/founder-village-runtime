@@ -16,7 +16,7 @@ ALTER TABLE app.member_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app.member_profiles FORCE ROW LEVEL SECURITY;
 CREATE POLICY member_owns_profile ON app.member_profiles TO fv_api
   USING (tenant_id::text = current_setting('fv.tenant', true) AND actor = current_setting('fv.actor', true));
-CREATE POLICY member_profile_functions ON app.member_profiles TO fv_founder_village_members_migrator USING (true);
+CREATE POLICY member_profile_functions ON app.member_profiles TO fv_founder_village_app_migrator USING (true);
 GRANT SELECT, INSERT, DELETE ON app.member_profiles TO fv_api;
 GRANT UPDATE (display_name, headline, location, listed, whatsapp_number) ON app.member_profiles TO fv_api;
 
@@ -82,6 +82,6 @@ CREATE POLICY member_stripe_settlement ON app.member_checkouts TO fv_api
   USING (method = 'card' AND current_setting('fv.members_settlement', true) = 'stripe');
 CREATE POLICY member_solana_settlement ON app.member_checkouts TO fv_api
   USING (method <> 'card' AND current_setting('fv.members_settlement', true) = 'solana');
-CREATE POLICY member_checkout_migrator ON app.member_checkouts TO fv_founder_village_members_migrator USING (true);
+CREATE POLICY member_checkout_migrator ON app.member_checkouts TO fv_founder_village_app_migrator USING (true);
 GRANT SELECT, INSERT ON app.member_checkouts TO fv_api;
 GRANT UPDATE (status, stripe_session, payment_id, next_check_at) ON app.member_checkouts TO fv_api;

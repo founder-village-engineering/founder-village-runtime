@@ -1,23 +1,5 @@
 [
   {
-    "id": "founder-food-deliveries",
-    "application": "founders",
-    "pagesProject": "founder-food-deliveries",
-    "productionOrigin": "https://founder-food-deliveries.pages.dev",
-    "localOrigins": ["https://food-deliveries.fv", "http://127.0.0.1:43910"],
-    "frontendPath": "apps/founder-food-deliveries",
-    "contractSource": "packages/frontend-contracts/founder-food-deliveries"
-  },
-  {
-    "id": "founder-village-members",
-    "application": "founder-village-members",
-    "pagesProject": "founder-village-members",
-    "productionOrigin": "https://founder-village-members.pages.dev",
-    "localOrigins": ["https://members.fv", "http://127.0.0.1:43911"],
-    "frontendPath": "apps/founder-village-members",
-    "contractSource": "packages/frontend-contracts/founder-village-members"
-  },
-  {
     "id": "founder-village-team",
     "application": "founder-village-team",
     "pagesProject": "founder-village-team",
@@ -29,15 +11,13 @@
   },
   {
     "id": "founder-village-app",
-    "application": "founder-village-members",
+    "application": "founder-village-app",
     "pagesProject": "founder-village-app",
     "productionOrigin": "https://founder-village-app.pages.dev",
     "localOrigins": ["https://app.fv", "http://127.0.0.1:43913"],
     "frontendPath": "apps/founder-village-app",
     "contractSource": "packages/frontend-contracts/founder-village-app",
     "featureFrontends": [
-      "founder-village-members",
-      "founder-food-deliveries",
       "founder-village-team"
     ]
   }

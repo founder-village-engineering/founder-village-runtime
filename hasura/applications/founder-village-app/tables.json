@@ -47,7 +47,7 @@
     ],
     "select_permissions": [
       {
-        "role": "user_founders",
+        "role": "user_founder_village_app",
         "permission": {
           "columns": [
             "id",
@@ -91,7 +91,7 @@
     ],
     "select_permissions": [
       {
-        "role": "user_founders",
+        "role": "user_founder_village_app",
         "permission": {
           "columns": [
             "id",
@@ -148,7 +148,7 @@
     ],
     "select_permissions": [
       {
-        "role": "user_founders",
+        "role": "user_founder_village_app",
         "permission": {
           "columns": [
             "id",
@@ -211,7 +211,7 @@
     ],
     "select_permissions": [
       {
-        "role": "user_founders",
+        "role": "user_founder_village_app",
         "permission": {
           "columns": [
             "id",

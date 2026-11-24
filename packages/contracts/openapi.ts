@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { recordInput, vectorQuery, operation } from "./index.ts";
-import { foodDeliveryInputSchema } from "../frontend-contracts/founder-food-deliveries/index.ts";
+import { foodDeliveryInputSchema } from "../frontend-contracts/founder-village-app/food-deliveries.ts";
 import {
   unversionedPublicApiContract,
   type PublicApiVersion,

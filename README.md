@@ -20,11 +20,12 @@ Authored application and automation sources are **TypeScript only** (`.ts`/`.tsx
 | Founder Farm | `founder-farm` | `founder-farm` | `founder_farm` |
 | Founder Cafe | `founder-cafe` | `founder-cafe` | `founder_cafe` |
 | Founder Residences | `founder-residences` | `founder-residences` | `founder_residences` |
-| Founders | `founders` | `founders` | `founders` |
+| Founder Village app | `founder-village-app` | `founder-village-app` | `founder_village_app` |
+| Founder Village Team | `founder-village-team` | `founder-village-team` | `founder_village_team` |
 
 Each database has its own API, worker, Hasura, migration, and monitoring login. `PUBLIC` cannot connect to application databases. Shared privilege groups cannot log in. `fv_control` and `fv_hasura` are internal control-plane and Hasura metadata databases. Staging and production use separate hosts and credentials; application database names stay the same in each environment.
 
-The `founders` application is intentionally a shared data boundary for founder-facing frontends. Its first schema owns founder members, each founder's companies, the organization expense ledger, and food deliveries. Recording a food delivery creates its matching posted expense atomically. The first registered frontend is `founder-food-deliveries`; future founder tools should map to this application only when they belong to the same data boundary.
+The two product apps are Founder Village and Founder Village Team. `founder-village-app` owns the member directory, profiles, premium checkout, founder companies, expenses, and food deliveries. A delivery creates its matching posted expense atomically. Internal workspaces stay in `founder-village-team`, with the same Team permissions whether accessed from the Team frontend or the main app. Existing installations should follow the [consolidation runbook](docs/runbooks/CONSOLIDATE_APP.md) before promoting a release that uses the new database.
 
 `config/frontends.json` is the canonical browser frontend registry. It maps each static Cloudflare Pages project to one application and its exact production/local origins. Runtime-owned TypeScript contracts live under `packages/frontend-contracts/<frontend>/` and are copied, with a checksummed ownership marker, into the matching frontend by `npm run frontend-contracts:sync`. See [application onboarding](docs/runbooks/APPLICATIONS.md).
 

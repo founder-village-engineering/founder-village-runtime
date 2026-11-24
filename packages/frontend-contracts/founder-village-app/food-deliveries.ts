@@ -1,8 +1,5 @@
 import { z } from "zod";
 
-export const foundersApplicationId = "founders" as const;
-export const foodDeliveriesFrontendId = "founder-food-deliveries" as const;
-
 const currencySchema = z.string().regex(/^[A-Z]{3}$/);
 const centsSchema = z.number().int().min(0).max(10_000_000);
 

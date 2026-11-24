@@ -6,9 +6,9 @@
 > Use placeholders and approved secret stores, inspect staged changes before every commit, and
 > immediately rotate anything that may have been exposed.
 
-The namespaces are `founder-village`, `founder-farm`, `founder-cafe`, `founder-residences`, and `founders`. They are separate databases, not schema aliases for one database. Registry database and Hasura names are exact; GraphQL namespaces use underscores because GraphQL identifiers cannot contain hyphens.
+`config/applications.json` defines the four platform namespaces and the two product namespaces, `founder-village-app` and `founder-village-team`. Every namespace has a separate database and an exact Hasura source name. GraphQL uses underscores when constructing the schema namespace.
 
-Frontend and application identities are deliberately independent. Multiple frontends may map to one application only after an explicit product/data-boundary decision. The `founders` database is the first intentional example: `founder-food-deliveries` uses its shared member, company, and expense records plus the food-delivery feature tables. Each frontend still owns its exact origin allowlist entry and runtime-owned contract directory.
+Each of the two frontend manifests binds to its matching product namespace. The primary app serves Members and Food Deliveries from its own database and uses explicitly scoped Team routes in `founder-village-team`. Future frontends can reuse a namespace when they share an approved data boundary. Each frontend owns its exact origin allowlist entry and runtime-owned contract directory.
 
 ```sh
 npm run namespace:add -- founder-library 'Founder Library'

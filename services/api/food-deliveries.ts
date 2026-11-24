@@ -10,11 +10,10 @@ import {
   founderExpensesResponseSchema,
   founderProfileSchema,
   founderTenantsResponseSchema,
-  foundersApplicationId,
   type FoodDelivery,
   type FounderExpense,
-} from "../../packages/frontend-contracts/founder-food-deliveries/index.ts";
-import { selectApplication } from "../../packages/database/applications.ts";
+} from "../../packages/frontend-contracts/founder-village-app/food-deliveries.ts";
+import { applicationId } from "../../packages/frontend-contracts/founder-village-app/index.ts";
 import { tenant, transaction } from "../../packages/database/index.ts";
 import { uuid } from "../../packages/contracts/index.ts";
 
@@ -73,15 +72,12 @@ const deliverySelection = `
   FROM app.food_deliveries d
   JOIN app.expenses e ON e.id=d.expense_id`;
 
-function selectedDatabase(
-  databases: Record<string, pg.Pool>,
-  request: FastifyRequest,
-): pg.Pool {
-  if (request.headers["x-application-id"] !== foundersApplicationId)
-    throw Object.assign(new Error("founders application required"), {
+function deliveryActor(request: FastifyRequest) {
+  if (request.headers["x-application-id"] !== applicationId)
+    throw Object.assign(new Error("Founder Village application required"), {
       statusCode: 400,
     });
-  return selectApplication(databases, foundersApplicationId);
+  return bearer(request);
 }
 
 function iso(value: Date | string): string {
@@ -144,23 +140,21 @@ async function currentFounder(
 
 export function registerFoodDeliveryRoutes(
   app: FastifyInstance,
-  databases: Record<string, pg.Pool>,
+  database: pg.Pool,
 ): void {
   app.get("/food-deliveries/tenants", async (request) => {
-    const database = selectedDatabase(databases, request);
-    const who = await bearer(request);
+    const who = await deliveryActor(request);
     return transaction(database, async (client) => {
       await client.query("SELECT set_config('fv.actor',$1,true)", [who.actor]);
       const result = await client.query<{ id: string; name: string }>(
-        "SELECT id,name FROM app.my_tenants() ORDER BY name,id",
+        "SELECT id,name FROM app.my_delivery_tenants() ORDER BY name,id",
       );
       return founderTenantsResponseSchema.parse(result.rows);
     });
   });
 
   app.get("/founders/me", async (request) => {
-    const database = selectedDatabase(databases, request);
-    const who = await bearer(request);
+    const who = await deliveryActor(request);
     const tenantId = uuid.parse(request.headers["x-tenant-id"]);
     return tenant(database, who.actor, tenantId, async (client) => {
       const founder = await currentFounder(client, tenantId);
@@ -203,8 +197,7 @@ export function registerFoodDeliveryRoutes(
   });
 
   app.get("/expenses", async (request) => {
-    const database = selectedDatabase(databases, request);
-    const who = await bearer(request);
+    const who = await deliveryActor(request);
     const tenantId = uuid.parse(request.headers["x-tenant-id"]);
     return tenant(database, who.actor, tenantId, async (client) => {
       const founder = await currentFounder(client, tenantId);
@@ -221,8 +214,7 @@ export function registerFoodDeliveryRoutes(
   });
 
   app.get("/food-deliveries", async (request) => {
-    const database = selectedDatabase(databases, request);
-    const who = await bearer(request);
+    const who = await deliveryActor(request);
     const tenantId = uuid.parse(request.headers["x-tenant-id"]);
     return tenant(database, who.actor, tenantId, async (client) => {
       const founder = await currentFounder(client, tenantId);
@@ -238,8 +230,7 @@ export function registerFoodDeliveryRoutes(
   });
 
   app.post("/food-deliveries", async (request, reply) => {
-    const database = selectedDatabase(databases, request);
-    const who = await bearer(request);
+    const who = await deliveryActor(request);
     const tenantId = uuid.parse(request.headers["x-tenant-id"]);
     const key = uuid.parse(request.headers["idempotency-key"]);
     const input = foodDeliveryInputSchema.parse(request.body);

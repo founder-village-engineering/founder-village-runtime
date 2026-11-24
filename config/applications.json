@@ -24,21 +24,15 @@
     "owner": "Founder Residences"
   },
   {
-    "id": "founders",
-    "database": "founders",
-    "hasuraSource": "founders",
-    "owner": "Founder Village Founders"
-  },
-  {
-    "id": "founder-village-members",
-    "database": "founder-village-members",
-    "hasuraSource": "founder-village-members",
-    "owner": "Founder Village"
-  },
-  {
     "id": "founder-village-team",
     "database": "founder-village-team",
     "hasuraSource": "founder-village-team",
+    "owner": "Founder Village"
+  },
+  {
+    "id": "founder-village-app",
+    "database": "founder-village-app",
+    "hasuraSource": "founder-village-app",
     "owner": "Founder Village"
   }
 ]

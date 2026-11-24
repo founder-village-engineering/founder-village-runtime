@@ -2,8 +2,8 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type pg from "pg";
 import { z } from "zod";
 import { bearer, denied } from "../../../packages/auth/index.ts";
+import { applicationId } from "../../../packages/frontend-contracts/founder-village-app/index.ts";
 import {
-  applicationId,
   communityId,
   memberResponseSchema,
   profileInputSchema,
@@ -17,7 +17,7 @@ import {
   deletionResponseSchema,
   membershipSchema,
   type DirectoryMember,
-} from "../../../packages/frontend-contracts/founder-village-members/index.ts";
+} from "../../../packages/frontend-contracts/founder-village-app/members.ts";
 import type { MemberPayments } from "./payments.ts";
 import {
   checkout,

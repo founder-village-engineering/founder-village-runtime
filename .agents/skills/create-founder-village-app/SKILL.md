@@ -25,7 +25,7 @@ python3 .agents/skills/create-founder-village-app/scripts/audit_workspace.py \
   --frontends ../founder-village-frontends
 ```
 
-Confirm the frontend slug, title, owner, purpose, one-label `.fv` hostname, unused local port, Pages project, and its runtime data boundary. A new product defaults to an application/database/Hasura source named for the slug. A frontend may instead map to an existing shared application only when that is an explicit product decision, such as several founder tools using the `founders` database. Do not reuse a database merely to save setup work.
+Confirm the frontend slug, title, owner, purpose, one-label `.fv` hostname, unused local port, Pages project, and its runtime data boundary. A new product defaults to an application/database/Hasura source named for the slug. Map a frontend to an existing application only when the products share an approved data boundary.
 
 Copy `assets/project.example.json` into an ignored path such as `founder-village-frontends/.state/new-apps/<slug>.json` and edit the copy. Runtime onboarding deliberately requires the manifest to remain inside the frontend repository. Keep:
 
@@ -34,7 +34,7 @@ Copy `assets/project.example.json` into an ignored path such as `founder-village
 - `contractSource` equal to `packages/frontend-contracts/<slug>`;
 - the frontend slug, application mapping, database/Hasura source, frontend path, and generated contract ownership explicit.
 
-For a frontend that combines existing product areas, list their registered standalone frontend IDs in `featureFrontends`. The runtime must define the exact route group for each feature. These entries reuse the feature databases, preserve the route authorization, and bundle the source contracts under `features/<frontend-id>/`.
+For a frontend that uses other applications, list their registered standalone frontend IDs in `featureFrontends`. Define a runtime route group for the primary application and for each referenced application. The primary app owns its Members and Food Deliveries contracts and imports the separate Team contracts under `features/founder-village-team/`.
 
 See `references/workspace-map.md` for ownership and `references/verification-and-release.md` for proof boundaries.
 

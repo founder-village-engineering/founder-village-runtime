@@ -218,14 +218,40 @@
       }
     },
     {
-      "name": "founders",
+      "name": "founder-village-team",
       "kind": "postgres",
       "customization": {
         "root_fields": {
-          "namespace": "founders"
+          "namespace": "founder_village_team"
         },
         "type_names": {
-          "prefix": "founders_"
+          "prefix": "founder_village_team_"
+        }
+      },
+      "tables": [],
+      "configuration": {
+        "connection_info": {
+          "database_url": {
+            "from_env": "HASURA_FOUNDER_VILLAGE_TEAM_DATABASE_URL"
+          },
+          "pool_settings": {
+            "max_connections": 5,
+            "idle_timeout": 60
+          },
+          "isolation_level": "read-committed",
+          "use_prepared_statements": true
+        }
+      }
+    },
+    {
+      "name": "founder-village-app",
+      "kind": "postgres",
+      "customization": {
+        "root_fields": {
+          "namespace": "founder_village_app"
+        },
+        "type_names": {
+          "prefix": "founder_village_app_"
         }
       },
       "tables": [
@@ -286,7 +312,7 @@
           ],
           "select_permissions": [
             {
-              "role": "user_founders",
+              "role": "user_founder_village_app",
               "permission": {
                 "columns": [
                   "id",
@@ -344,7 +370,7 @@
           ],
           "select_permissions": [
             {
-              "role": "user_founders",
+              "role": "user_founder_village_app",
               "permission": {
                 "columns": [
                   "id",
@@ -420,7 +446,7 @@
           ],
           "select_permissions": [
             {
-              "role": "user_founders",
+              "role": "user_founder_village_app",
               "permission": {
                 "columns": [
                   "id",
@@ -502,7 +528,7 @@
           ],
           "select_permissions": [
             {
-              "role": "user_founders",
+              "role": "user_founder_village_app",
               "permission": {
                 "columns": [
                   "id",
@@ -551,59 +577,7 @@
       "configuration": {
         "connection_info": {
           "database_url": {
-            "from_env": "HASURA_FOUNDERS_DATABASE_URL"
-          },
-          "pool_settings": {
-            "max_connections": 5,
-            "idle_timeout": 60
-          },
-          "isolation_level": "read-committed",
-          "use_prepared_statements": true
-        }
-      }
-    },
-    {
-      "name": "founder-village-members",
-      "kind": "postgres",
-      "customization": {
-        "root_fields": {
-          "namespace": "founder_village_members"
-        },
-        "type_names": {
-          "prefix": "founder_village_members_"
-        }
-      },
-      "tables": [],
-      "configuration": {
-        "connection_info": {
-          "database_url": {
-            "from_env": "HASURA_FOUNDER_VILLAGE_MEMBERS_DATABASE_URL"
-          },
-          "pool_settings": {
-            "max_connections": 5,
-            "idle_timeout": 60
-          },
-          "isolation_level": "read-committed",
-          "use_prepared_statements": true
-        }
-      }
-    },
-    {
-      "name": "founder-village-team",
-      "kind": "postgres",
-      "customization": {
-        "root_fields": {
-          "namespace": "founder_village_team"
-        },
-        "type_names": {
-          "prefix": "founder_village_team_"
-        }
-      },
-      "tables": [],
-      "configuration": {
-        "connection_info": {
-          "database_url": {
-            "from_env": "HASURA_FOUNDER_VILLAGE_TEAM_DATABASE_URL"
+            "from_env": "HASURA_FOUNDER_VILLAGE_APP_DATABASE_URL"
           },
           "pool_settings": {
             "max_connections": 5,

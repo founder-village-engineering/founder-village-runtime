@@ -57,7 +57,8 @@ export async function exerciseTeam(db: pg.Pool, migrator: pg.Pool) {
     assert.deepEqual((await get("/tenants", o)).json(), []);
     assert.equal((await get("/conversations", o)).statusCode, 403);
     assert.equal(
-      (await get("/bots", { ...a, "x-application-id": "founders" })).statusCode,
+      (await get("/bots", { ...a, "x-application-id": "founder-village-app" }))
+        .statusCode,
       403,
     );
     const portal = { ...a, origin: "http://127.0.0.1:43913" };

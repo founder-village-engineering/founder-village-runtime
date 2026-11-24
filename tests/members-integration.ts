@@ -1,3 +1,4 @@
+import { applicationId } from "../packages/frontend-contracts/founder-village-app/index.ts";
 import assert from "node:assert/strict";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import {
@@ -8,10 +9,7 @@ import {
 import bs58 from "bs58";
 import type pg from "pg";
 import { local, localToken } from "../packages/auth/index.ts";
-import {
-  applicationId,
-  communityId,
-} from "../packages/frontend-contracts/founder-village-members/index.ts";
+import { communityId } from "../packages/frontend-contracts/founder-village-app/members.ts";
 import { api } from "../services/api/app.ts";
 
 const settings = {
@@ -31,7 +29,7 @@ const signature = () => bs58.encode(randomBytes(64));
 export async function exerciseMembers(database: pg.Pool) {
   if (!local()) throw new Error("members integration is local-only");
   const stripeSession = `cs_test_members_fixture_${randomUUID()}`;
-  const portalOrigin = "http://127.0.0.1:43913";
+  const portalOrigin = "https://app.fv";
   const stripeIntent = `pi_members_fixture_${randomUUID()}`;
   const previous = Object.fromEntries(
     Object.keys(settings).map((key) => [key, process.env[key]]),
@@ -55,7 +53,7 @@ export async function exerciseMembers(database: pg.Pool) {
     amount_captured: 2500,
     currency: "usd",
     payment_intent: stripeIntent,
-    metadata: { app: applicationId, member_order_id: orderId },
+    metadata: { app: "founder-village-members", member_order_id: orderId },
   });
   const session = () => ({
     id: stripeSession,
@@ -63,7 +61,7 @@ export async function exerciseMembers(database: pg.Pool) {
     mode: "payment",
     client_reference_id: orderId,
     expires_at: expiresAt,
-    metadata: { app: applicationId, member_order_id: orderId },
+    metadata: { app: "founder-village-members", member_order_id: orderId },
     amount_total: 2500,
     currency: "usd",
     status: stripeState,
@@ -77,7 +75,10 @@ export async function exerciseMembers(database: pg.Pool) {
             currency: "usd",
             amount_received: 2500,
             livemode: false,
-            metadata: { app: applicationId, member_order_id: orderId },
+            metadata: {
+              app: "founder-village-members",
+              member_order_id: orderId,
+            },
             latest_charge: charge(),
           }
         : null,

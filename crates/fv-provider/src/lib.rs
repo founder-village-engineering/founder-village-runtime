@@ -4,12 +4,15 @@ use reqwest::{Method, blocking::Client};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
+mod project;
+
 const NETWORK_RANGE: &str = "10.91.0.0/16";
 const SUBNET_RANGE: &str = "10.91.1.0/24";
 
 pub struct Hetzner {
     client: Client,
     token: String,
+    endpoint: String,
 }
 
 impl Hetzner {
@@ -19,14 +22,17 @@ impl Hetzner {
                 .timeout(Duration::from_secs(30))
                 .redirect(reqwest::redirect::Policy::none())
                 .build()?,
-            token: std::env::var("HCLOUD_TOKEN").context("HCLOUD_TOKEN required")?,
+            token: std::env::var("FV_HCLOUD_TOKEN")
+                .or_else(|_| std::env::var("HCLOUD_TOKEN"))
+                .context("Founder Village Hetzner project token required")?,
+            endpoint: "https://api.hetzner.cloud/v1".into(),
         })
     }
 
     fn call(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
         let mut request = self
             .client
-            .request(method, format!("https://api.hetzner.cloud/v1/{path}"))
+            .request(method, format!("{}/{path}", self.endpoint))
             .bearer_auth(&self.token);
         if let Some(body) = body {
             request = request.json(&body);
@@ -52,39 +58,8 @@ impl Hetzner {
         Ok(items.first().cloned())
     }
 
-    fn owned(&self, kind: &str, c: &Config) -> Result<Option<Value>> {
-        self.find(kind, &format!("label_selector=fv-owner%3D{}", c.project))
-    }
-
     fn server(&self, id: u64) -> Result<Value> {
         Ok(self.call(Method::GET, &format!("servers/{id}"), None)?["server"].clone())
-    }
-
-    fn selected_server(&self, c: &Config) -> Result<Option<Value>> {
-        let owned = self.owned("servers", c)?;
-        let server = match &c.provider.existing_server {
-            Some(binding) => {
-                ensure!(
-                    owned.as_ref().is_none_or(|s| s["id"] == binding.id),
-                    "another server is already owned by this runtime"
-                );
-                Some(self.server(binding.id)?)
-            }
-            None => {
-                if owned.is_none() {
-                    ensure!(
-                        self.find("servers", &format!("name={}", c.project))?
-                            .is_none(),
-                        "server name already exists; set provider.existing_server to select it"
-                    );
-                }
-                owned
-            }
-        };
-        if let Some(server) = &server {
-            check_server(c, server)?;
-        }
-        Ok(server)
     }
 
     pub fn plan(c: &Config) -> Value {
@@ -107,12 +82,14 @@ impl Hetzner {
     }
 
     pub fn status(&self, c: &Config) -> Result<Value> {
-        let Some(server) = self.selected_server(c)? else {
-            return Ok(json!({"status":"absent"}));
+        let project = self.project_inventory(c)?;
+        let Some(server) = project.server else {
+            return Ok(json!({"status":"absent","project_isolated":true}));
         };
-        let firewall = self.owned("firewalls", c)?.unwrap_or(Value::Null);
-        let network = self.owned("networks", c)?.unwrap_or(Value::Null);
+        let firewall = project.firewall.unwrap_or(Value::Null);
+        let network = project.network.unwrap_or(Value::Null);
         Ok(json!({
+            "project_isolated": true,
             "status": server["status"],
             "platform": format!("linux/{}", c.provider.architecture.oci()),
             "owned": server["labels"]["fv-owner"] == c.project,
@@ -132,7 +109,8 @@ impl Hetzner {
             c.environment != "local",
             "local manifest cannot provision cloud resources"
         );
-        let existing = self.selected_server(c)?;
+        let project = self.project_inventory(c)?;
+        let existing = project.server;
         ensure!(
             existing
                 .as_ref()
@@ -140,12 +118,6 @@ impl Hetzner {
                 || !c.ssh_cidrs.is_empty(),
             "initial server provisioning requires a bootstrap SSH CIDR"
         );
-        let location = self
-            .find("locations", &format!("name={}", c.provider.location))?
-            .context("Hetzner location not found")?;
-        let zone = location["network_zone"]
-            .as_str()
-            .context("location has no network zone")?;
         let image = if existing.is_none() {
             ensure!(
                 cloud_init.is_some()
@@ -176,14 +148,27 @@ impl Hetzner {
             None
         };
 
-        let firewall = self.owned("firewalls", c)?;
-        let network = self.owned("networks", c)?;
-        check_attachments(existing.as_ref(), firewall.as_ref(), network.as_ref(), zone)?;
+        let firewall = project.firewall;
+        let network = project.network;
         let labels = json!({"fv-owner": c.project});
         let rules = firewall_rules(c);
         let firewall_id = if let Some(firewall) = firewall {
             let id = resource_id(&firewall)?;
             if !firewall_rules_match(c, &firewall) {
+                let fresh = self.call(Method::GET, &format!("firewalls/{id}"), None)?;
+                let fresh = &fresh["firewall"];
+                ensure!(
+                    fresh["id"] == id
+                        && fresh["name"] == firewall["name"]
+                        && fresh["labels"]["fv-owner"] == c.project,
+                    "firewall ownership changed before rule update"
+                );
+                check_attachments(
+                    existing.as_ref(),
+                    Some(fresh),
+                    network.as_ref(),
+                    &project.zone,
+                )?;
                 let result = self.call(
                     Method::POST,
                     &format!("firewalls/{id}/actions/set_rules"),
@@ -203,7 +188,7 @@ impl Hetzner {
             self.wait_many("firewalls", &result["actions"])?;
             resource_id(&result["firewall"])?
         };
-        let subnet = json!({"type":"cloud", "network_zone":zone, "ip_range":SUBNET_RANGE});
+        let subnet = json!({"type":"cloud", "network_zone":project.zone, "ip_range":SUBNET_RANGE});
         let network_id = if let Some(network) = network {
             let id = resource_id(&network)?;
             if list(&network, "subnets")?.is_empty() {
@@ -301,6 +286,8 @@ impl Hetzner {
                 && server["protection"]["rebuild"] == true,
             "Hetzner ownership or protection verification failed"
         );
+        // Fail the provider receipt if another controller changed project scope during application.
+        self.project_inventory(c)?;
         Ok(json!({
             "server_id":id, "status":"converged",
             "public_ip":server["public_net"]["ipv4"]["ip"],

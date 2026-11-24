@@ -2,15 +2,15 @@ import Stripe from "stripe";
 import { z } from "zod";
 import { denied } from "../../../packages/auth/index.ts";
 import { frontends, originAllowed } from "../../../packages/frontends/index.ts";
-import {
-  applicationId,
-  checkoutActionSchema,
-} from "../../../packages/frontend-contracts/founder-village-members/index.ts";
+import { applicationId } from "../../../packages/frontend-contracts/founder-village-app/index.ts";
+import { checkoutActionSchema } from "../../../packages/frontend-contracts/founder-village-app/members.ts";
 import type { Order } from "./store.ts";
 
 const attemptId = z.uuid();
+// Stripe stores this identifier in existing sessions, intents, and reversals.
+const stripeApplication = "founder-village-members";
 const stripeMetadata = (order: Order) => ({
-  app: applicationId,
+  app: stripeApplication,
   member_order_id: order.id,
 });
 
@@ -18,7 +18,7 @@ export function matchesSession(order: Order, session: Stripe.Checkout.Session) {
   return (
     session.livemode !== order.test &&
     session.mode === "payment" &&
-    session.metadata?.app === applicationId &&
+    session.metadata?.app === stripeApplication &&
     session.metadata.member_order_id === order.id &&
     session.client_reference_id === order.id &&
     session.currency === "usd" &&
@@ -43,7 +43,7 @@ export function sessionPayment(order: Order, session: Stripe.Checkout.Session) {
     intent.currency !== "usd" ||
     intent.livemode === order.test ||
     intent.amount_received !== Number(order.amount_units) ||
-    intent.metadata.app !== applicationId ||
+    intent.metadata.app !== stripeApplication ||
     intent.metadata.member_order_id !== order.id
   )
     return;
@@ -169,7 +169,7 @@ export class StripePayments {
       case "checkout.session.expired": {
         const session = event.data.object;
         const id = attemptId.safeParse(session.metadata?.member_order_id);
-        if (session.metadata?.app !== applicationId || !id.success) return;
+        if (session.metadata?.app !== stripeApplication || !id.success) return;
         return {
           kind: "session" as const,
           orderId: id.data,
@@ -198,7 +198,7 @@ export class StripePayments {
         : charge.payment_intent?.id;
     if (
       !id.success ||
-      charge.metadata.app !== applicationId ||
+      charge.metadata.app !== stripeApplication ||
       !intentId ||
       charge.livemode === this.test ||
       charge.currency !== "usd" ||

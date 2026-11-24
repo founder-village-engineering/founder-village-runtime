@@ -8,7 +8,7 @@ import {
   type Offer,
   type PaymentMethod,
   type ProfileInput,
-} from "../../../packages/frontend-contracts/founder-village-members/index.ts";
+} from "../../../packages/frontend-contracts/founder-village-app/members.ts";
 
 export type Order = {
   id: string;

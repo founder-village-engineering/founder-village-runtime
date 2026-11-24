@@ -7,7 +7,7 @@ import {
   engineeringItemSchema,
   engineeringPageSchema,
   engineeringUpdateSchema,
-} from "../../../packages/frontend-contracts/founder-village-app/index.ts";
+} from "../../../packages/frontend-contracts/founder-village-team/engineering.ts";
 import { mutate, type teamScope } from "./access.ts";
 import { openTeamPayload, sealTeamPayload } from "./crypto.ts";
 

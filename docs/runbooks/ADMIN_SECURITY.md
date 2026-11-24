@@ -20,7 +20,7 @@ CLI code issuance uses the existing admin session-issuer database role. The back
 
 ## Private Hasura inspection
 
-The Hasura page embeds `/hasura/console/data/manage/source/<source>` inside `admin.fv`. The exact registered source names are `founder-village`, `founder-farm`, `founder-cafe`, `founder-residences`, and `founders`. Access requires a configured root actor, `admins.manage`, and current grants for all applications. A delegated administrator cannot obtain cluster-wide access by changing the selected application, spoofing Hasura headers or calling a console asset directly.
+The Hasura page embeds `/hasura/console/data/manage/source/<source>` inside `admin.fv`. It uses the exact `hasuraSource` names in `config/applications.json`, including `founder-village-app` and `founder-village-team`. Access requires a configured root actor, `admins.manage`, and current grants for all applications. A delegated administrator cannot obtain cluster-wide access by changing the selected application, spoofing Hasura headers or calling a console asset directly.
 
 The proxy constructs its own upstream headers. It discards browser authorization, cookies, role and secret headers and adds the private Hasura credential on the server. The browser bridge supplies CSRF headers and a public transport marker required by the vendor console; that marker grants no access. Each API or asset request authenticates again. HTML, assets, responses and errors use `Cache-Control: no-store` and `Pragma: no-cache`.
 

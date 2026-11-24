@@ -33,7 +33,7 @@ import {
   registerMemberRoutes,
   registerMemberWebhook,
 } from "./members/routes.ts";
-import { applicationId as membersApplicationId } from "../../packages/frontend-contracts/founder-village-members/index.ts";
+import { applicationId as primaryApplicationId } from "../../packages/frontend-contracts/founder-village-app/index.ts";
 import {
   installApiVersionHeaders,
   registerApiVersionCatalog,
@@ -47,8 +47,8 @@ export async function api(databases: Record<string, pg.Pool> | pg.Pool) {
     selectApplication(all, req.headers["x-application-id"]);
   const app = await server("api");
   installFrontendCors(app);
-  const membersDb = all[membersApplicationId];
-  const payments = membersDb ? new MemberPayments(membersDb) : undefined;
+  const primaryDb = all[primaryApplicationId];
+  const payments = primaryDb ? new MemberPayments(primaryDb) : undefined;
   if (payments) {
     registerMemberWebhook(app, payments);
     let stop: (() => Promise<void>) | undefined;
@@ -66,11 +66,12 @@ export async function api(databases: Record<string, pg.Pool> | pg.Pool) {
   // Root URLs deliberately remain pinned to this registrar. A future major
   // gets a separate registrar and must not alter v1 behavior in place.
   const registerV1Routes = (routes: FastifyInstance) => {
-    registerFoodDeliveryRoutes(routes, all);
+    if (primaryDb && payments) {
+      registerFoodDeliveryRoutes(routes, primaryDb);
+      registerMemberRoutes(routes, primaryDb, payments);
+    }
     const teamDb = all[teamApplicationId];
     if (teamDb) registerTeamRoutes(routes, teamDb);
-    if (membersDb && payments)
-      registerMemberRoutes(routes, membersDb, payments);
     routes.get("/records", async (req) => {
       const db = application(req);
       const who = await bearer(req),

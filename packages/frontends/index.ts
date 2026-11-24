@@ -22,22 +22,15 @@ export const customOriginSchema = z
   .string()
   .regex(/^https:\/\/[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?\.foundervillage\.xyz$/);
 
-const featureIds = [
-  "founder-food-deliveries",
-  "founder-village-members",
-  "founder-village-team",
-] as const;
-const featureRoutes: Record<(typeof featureIds)[number], RegExp> = {
-  "founder-food-deliveries":
-    /^\/(?:food-deliveries(?:\/tenants)?|founders\/me|expenses)$/,
-  "founder-village-members":
-    /^\/members\/(?:me|profile|delete|membership|directory(?:\/[^/]+\/whatsapp)?|checkout(?:\/[^/]+\/(?:open|check|cancel))?)$/,
+const applicationRoutes: Partial<Record<string, RegExp>> = {
+  "founder-village-app":
+    /^\/(?:food-deliveries(?:\/tenants)?|founders\/me|expenses|members\/(?:me|profile|delete|membership|directory(?:\/[^/]+\/whatsapp)?|checkout(?:\/[^/]+\/(?:open|check|cancel))?))$/,
   "founder-village-team":
     /^\/team\/(?:tenants|capabilities|bots(?:\/[^/]+)?|conversations(?:\/[^/]+(?:\/messages(?:\/[^/]+\/content)?|\/replies)?)?|engineering\/items(?:\/[^/]+\/status)?)$/,
 };
 
 export const featureFrontendsSchema = z
-  .array(z.enum(featureIds))
+  .array(z.string().regex(/^[a-z][a-z0-9-]{0,62}$/))
   .min(1)
   .refine(
     (ids) => new Set(ids).size === ids.length,
@@ -92,17 +85,26 @@ function frontendOrigins(frontend: FrontendApplication) {
 export function featureFrontends(frontend: FrontendApplication) {
   const sources = (frontend.featureFrontends ?? []).map((id) => {
     const source = frontends.find((entry) => entry.id === id);
-    if (!source || source.id === frontend.id || source.featureFrontends)
+    if (
+      !source ||
+      source.id === frontend.id ||
+      source.featureFrontends ||
+      source.application === frontend.application
+    )
       throw new Error(
-        "feature must reference a registered standalone frontend",
+        "feature must reference a standalone frontend in another application",
       );
     return source;
   });
   if (
     sources.length &&
-    !sources.some((source) => source.application === frontend.application)
+    ![frontend, ...sources].every((source) =>
+      Object.hasOwn(applicationRoutes, source.application),
+    )
   )
-    throw new Error("integrated frontend must include its primary application");
+    throw new Error(
+      "integrated frontend requires scoped routes for each application",
+    );
   return sources;
 }
 
@@ -174,12 +176,10 @@ function grantsFeatureRoute(
   application?: string,
 ) {
   const path = requestPath.split("?", 1)[0]!.replace(/^\/v1(?=\/)/, "");
-  return (frontend.featureFrontends ?? []).some(
-    (id) =>
-      featureRoutes[id].test(path) &&
-      (application === undefined ||
-        frontends.find((source) => source.id === id)?.application ===
-          application),
+  return [frontend, ...featureFrontends(frontend)].some(
+    (source) =>
+      (application === undefined || source.application === application) &&
+      applicationRoutes[source.application]?.test(path),
   );
 }
 

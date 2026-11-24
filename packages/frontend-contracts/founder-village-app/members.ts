@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-export const applicationId = "founder-village-members" as const;
 export const communityId = "a7c22ce4-dcee-442c-b809-7eb9b14a5d53" as const;
 
 export const whatsappNumberSchema = z.string().regex(/^\+[1-9][0-9]{7,14}$/);

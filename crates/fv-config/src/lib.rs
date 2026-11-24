@@ -26,6 +26,9 @@ pub struct Provider {
     pub server_type: String,
     pub image: String,
     pub ssh_key_ids: Vec<u64>,
+    /// Additional project-owned resource IDs approved in the private manifest.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub project_resource_ids: BTreeMap<String, Vec<u64>>,
     #[serde(default, skip_serializing_if = "Architecture::is_amd64")]
     pub architecture: Architecture,
     #[serde(default, skip_serializing_if = "Option::is_none")]
