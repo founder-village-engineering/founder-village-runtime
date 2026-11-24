@@ -40,7 +40,7 @@
     "test:browser:team": "npm --prefix ../founder-village-frontends run pages -- plan --app founder-village-team && mkdir -p .state/team-browser-dist && cp -R ../founder-village-frontends/apps/founder-village-team/dist/. .state/team-browser-dist/ && playwright test --config tests/team-browser/playwright.config.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "3.1169.0",
+    "@aws-sdk/client-s3": "3.1175.0",
     "@aws-sdk/s3-request-presigner": "3.1169.0",
     "@fastify/cookie": "11.1.5",
     "@fastify/helmet": "13.2.0",
