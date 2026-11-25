@@ -55,6 +55,9 @@ test("frontend registry binds each app to its exact Pages and local origins", ()
     "https://evil.founder-village-app.pages.dev",
     "https://founder-village-app.pages.dev.evil.test",
     "http://founder-village-app.pages.dev",
+    "https://www.founderhaus.org",
+    "https://foundervillage.org.evil.test",
+    "https://founderhaus.org:444",
     "null",
   ]) {
     assert(!originAllowed(applicationId, lookalike));
@@ -84,6 +87,8 @@ test("food delivery inputs reject unknown fields and malformed expenses", () => 
 test("the primary surface is confined to each feature's registered routes", () => {
   for (const origin of [
     "https://founder-village-app.pages.dev",
+    "https://founderhaus.org",
+    "https://foundervillage.org",
     "https://app.fv",
     "http://127.0.0.1:43913",
   ]) {
@@ -126,7 +131,10 @@ test("API preflights only registered origins and preserves denial headers", asyn
       return { rows: [], rowCount: 0 };
     },
   } as unknown as pg.Pool;
-  const app = await api({ [applicationId]: database });
+  const app = await api({
+    [applicationId]: database,
+    "founder-village-team": database,
+  });
   t.after(() => app.close());
   const origin = "https://founder-village-app.pages.dev";
   const allowed = await app.inject({
@@ -164,6 +172,24 @@ test("API preflights only registered origins and preserves denial headers", asyn
   });
   assert.equal(anonymous.statusCode, 401);
   assert.equal(anonymous.headers["access-control-allow-origin"], origin);
+  for (const alias of [
+    "https://founderhaus.org",
+    "https://foundervillage.org",
+  ]) {
+    for (const [application, path] of [
+      [applicationId, "/v1/members/me"],
+      [applicationId, "/v1/food-deliveries/tenants"],
+      ["founder-village-team", "/v1/team/tenants"],
+    ] as const) {
+      const response = await app.inject({
+        method: "GET",
+        url: path,
+        headers: { origin: alias, "x-application-id": application },
+      });
+      assert.equal(response.statusCode, 401, path);
+      assert.equal(response.headers["access-control-allow-origin"], alias);
+    }
+  }
   const crossed = await app.inject({
     method: "GET",
     url: "/records",

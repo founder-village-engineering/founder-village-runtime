@@ -124,11 +124,12 @@ bin/fv backup restore-drill
 
 ## Operations and production
 
-The existing-VM workflow targets a Helsinki CAX11 on Ubuntu 24.04 ARM64. Tagged releases produce one signed AMD64/ARM64 image index and separate native CLI bundles. The provisioning runbook covers VM binding, Cloudflare Tunnel for API, admin, and operator SSH, verified firewall lockdown, backups, and first promotion.
+The production profile targets a Helsinki CAX11 on Ubuntu 26.04 ARM64. Tagged releases produce one signed AMD64/ARM64 image index and separate native CLI bundles. The production runbook connects the runtime API, admin, and operator SSH to the Pages app and its two apex domains.
 
 - [Architecture and decisions](docs/adr/0001-runtime.md)
 - [Security boundaries](docs/SECURITY.md)
 - [Administrator red/blue exercises](docs/runbooks/ADMIN_SECURITY.md)
+- [Founder Village production](docs/runbooks/PRODUCTION.md)
 - [Provisioning and first launch](docs/runbooks/PROVISIONING.md)
 - [Release and rollback](docs/runbooks/DEPLOYMENT.md)
 - [Backup and disaster recovery](docs/runbooks/RECOVERY.md)

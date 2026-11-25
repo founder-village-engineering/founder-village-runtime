@@ -69,7 +69,7 @@ enum Cmd {
         action: String,
     },
     Release {
-        #[arg(value_parser=["prepare","deploy","rollback","verify"])]
+        #[arg(value_parser=["prepare","deploy","promote","rollback","verify"])]
         action: String,
         #[arg(long)]
         revision: Option<String>,
@@ -336,6 +336,7 @@ fn execute() -> Result<()> {
                         .into_owned(),
                 );
                 env.insert("FV_ARCH".into(), c.provider.architecture.oci().into());
+                env.insert("FV_HOST_IMAGE".into(), c.provider.image.clone());
                 if c.cloudflare.ssh_domain.is_some() {
                     env.insert(
                         "FV_TUNNEL_SSH_INTERFACE".into(),
@@ -365,6 +366,15 @@ fn execute() -> Result<()> {
                 )?
             ),
             "deploy" => fv_ops::deploy::deploy(&root, &c, &id.context("--id required")?)?,
+            "promote" => {
+                ensure!(
+                    image.is_none() && id.is_none(),
+                    "promote selects the installed signed image"
+                );
+                let revision = revision.context("--revision required")?;
+                fv_ops::deploy::promote_installed(&root, &c, &revision)?;
+                println!("Promoted installed signed runtime {revision}");
+            }
             "rollback" => fv_ops::deploy::rollback(&root, &c)?,
             _ => {
                 drop(_lock);

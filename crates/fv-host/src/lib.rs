@@ -114,9 +114,8 @@ pub fn assert_platform(c: &Config) -> Result<()> {
     );
     let os = std::fs::read_to_string("/etc/os-release")?;
     ensure!(
-        os.lines().any(|line| line == "ID=ubuntu")
-            && os.lines().any(|line| line == "VERSION_CODENAME=noble"),
-        "remote runtime requires Ubuntu 24.04 LTS"
+        matches_ubuntu_release(&os, c.provider.ubuntu_version()?),
+        "host OS does not match the configured Ubuntu LTS image"
     );
     let machine = Command::new("uname").arg("-m").output()?;
     ensure!(
@@ -126,6 +125,16 @@ pub fn assert_platform(c: &Config) -> Result<()> {
         "host architecture does not match the configured Linux platform"
     );
     Ok(())
+}
+
+fn matches_ubuntu_release(os: &str, version: &str) -> bool {
+    fn field<'a>(os: &'a str, name: &str) -> Option<&'a str> {
+        os.lines().find_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            (key == name).then(|| value.trim_matches(['\'', '"']))
+        })
+    }
+    field(os, "ID") == Some("ubuntu") && field(os, "VERSION_ID") == Some(version)
 }
 
 pub fn verify_tunnel_ssh(
@@ -356,6 +365,24 @@ pub fn assert_owned_host(c: &Config) -> Result<()> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_requires_the_ubuntu_version_selected_by_the_manifest() {
+        for version in ["24.04", "26.04"] {
+            assert!(matches_ubuntu_release(
+                &format!("VERSION_ID=\"{version}\"\nID=ubuntu\n"),
+                version
+            ));
+        }
+        assert!(!matches_ubuntu_release(
+            "ID=ubuntu\nVERSION_ID=\"24.04\"",
+            "26.04"
+        ));
+        assert!(!matches_ubuntu_release(
+            "ID=debian\nVERSION_ID=\"26.04\"",
+            "26.04"
+        ));
+    }
 
     #[test]
     fn cloud_init_keys_are_quoted_and_cannot_inject_lines() {

@@ -29,7 +29,7 @@ Confirm the frontend slug, title, owner, purpose, one-label `.fv` hostname, unus
 
 Copy `assets/project.example.json` into an ignored path such as `founder-village-frontends/.state/new-apps/<slug>.json` and edit the copy. Runtime onboarding deliberately requires the manifest to remain inside the frontend repository. Keep:
 
-- an optional `customOrigin` for a requested one-label HTTPS alias under `foundervillage.xyz`, registered with Pages, DNS and OIDC;
+- an optional `customOrigin` for a one-label HTTPS alias under `foundervillage.xyz`, or `customOrigins` for multiple exact aliases. The production primary app uses the approved `founderhaus.org` and `foundervillage.org` apexes. Register each alias with Pages, DNS and OIDC;
 - `productionOrigin` equal to `https://<pagesProject>.pages.dev`;
 - `contractSource` equal to `packages/frontend-contracts/<slug>`;
 - the frontend slug, application mapping, database/Hasura source, frontend path, and generated contract ownership explicit.
@@ -136,9 +136,11 @@ Use the proportional Rust, backup/restore, security, and browser checks listed i
 
 ## 7. Provision and deploy Pages explicitly
 
-Do not invent public API or OIDC values. Before deployment, register the exact `https://<pagesProject>.pages.dev/auth/callback` URI in the existing public OIDC client, allow the Pages origin to call the token endpoint, and verify that its access-token audience equals the runtime `OIDC_AUDIENCE`. Keep administrator assurance and frontend API access as separate claims even if they use the same provider.
+Do not invent public API or OIDC values. Before deployment, register the exact `<origin>/auth/callback` URI and token exchange origin for each public frontend hostname and verify that the SPA's access-token audience equals the runtime `OIDC_AUDIENCE`. Use a distinct public SPA client for authorization code with PKCE S256 and no client secret. Keep administrator assurance and frontend API access as separate claims even if they use the same provider.
 
-Provisioning and deployment require Cloudflare credentials and real public runtime configuration:
+For production use `npm run frontend:production -- plan --app <slug> --config config/production.example.json --frontends-root ../founder-village-frontends` to generate the exact identity registration plan. Record the SPA client ID under `auth.frontend_client_ids.<slug>` in the private production profile after provider registration. Use the same bridge with `provision`, or with `deploy` and `verify` plus `--revision <signed-runtime-revision>`, and pass the private profile for those operations. The bridge derives public Pages build inputs from that profile, runs the live API and OIDC checks, and uses the shared Pages commands.
+
+The lower-level Pages commands require Cloudflare credentials and real public runtime configuration:
 
 ```sh
 # founder-village-frontends
@@ -148,12 +150,14 @@ FV_RUNTIME_API_ORIGIN=https://... \
 FV_OIDC_AUTHORIZATION_ENDPOINT=https://... \
 FV_OIDC_TOKEN_ENDPOINT=https://... \
 FV_OIDC_CLIENT_ID=... \
+FV_OIDC_AUDIENCE=... \
+FV_RUNTIME_REVISION=... \
 npm run pages -- deploy --app <slug>
 
 npm run pages -- verify --app <slug>
 ```
 
-The shared release code builds the app, rejects Worker/Functions output and placeholder production values, records an artifact digest, deploys with `wrangler pages deploy`, and verifies the exact `pages.dev` origin. The manual GitHub workflow invokes this same code.
+The shared release code builds the app, rejects Worker/Functions output and placeholder production values, records an artifact digest, deploys with `wrangler pages deploy`, and verifies the exact Pages origin and configured aliases. The manual GitHub workflow invokes this same code.
 
 Report local, authenticated, provider, deployed, and backup proof separately. A successful build is not a deployment, a Pages upload is not backend readiness, and desktop proof is not mobile proof.
 

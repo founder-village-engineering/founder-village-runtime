@@ -1,5 +1,5 @@
 {
   "issuer": "https://token.actions.githubusercontent.com",
-  "identityPattern": "^https://github\\.com/founder-haus-engineering/founder-village-runtime/\\.github/workflows/release\\.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$",
-  "registryPrefix": "ghcr.io/founder-haus-engineering/founder-village-runtime@sha256:"
+  "identityPattern": "^https://github\\.com/founder-village-engineering/founder-village-runtime/\\.github/workflows/release\\.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$",
+  "registryPrefix": "ghcr.io/founder-village-engineering/founder-village-runtime@sha256:"
 }

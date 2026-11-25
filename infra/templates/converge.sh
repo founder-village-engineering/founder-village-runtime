@@ -2,13 +2,13 @@
 set -euo pipefail
 umask 077
 [[ $(id -u) == 0 ]] || { echo 'Run host convergence as root.' >&2; exit 1; }
-: "${FV_ROOT:?runtime root required}" "${FV_CONFIG:?manifest required}" "${FV_ARCH:?architecture required}"
+: "${FV_ROOT:?runtime root required}" "${FV_CONFIG:?manifest required}" "${FV_ARCH:?architecture required}" "${FV_HOST_IMAGE:?OS image required}"
 [[ $FV_ROOT =~ ^/[a-zA-Z0-9._/-]+$ && $FV_CONFIG =~ ^/[a-zA-Z0-9._/-]+$ ]]
 [[ -x "$FV_ROOT/target/release/fv" ]]
 [[ $(dpkg --print-architecture) == "$FV_ARCH" ]]
 # shellcheck source=/dev/null
 . /etc/os-release
-[[ "$ID" == ubuntu && "$VERSION_CODENAME" == noble ]]
+[[ "$ID" == ubuntu && "ubuntu-$VERSION_ID" == "$FV_HOST_IMAGE" ]]
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y --no-install-recommends ca-certificates curl gnupg ufw wireguard age jq rsync unattended-upgrades openssh-server xz-utils

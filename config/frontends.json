@@ -14,11 +14,10 @@
     "application": "founder-village-app",
     "pagesProject": "founder-village-app",
     "productionOrigin": "https://founder-village-app.pages.dev",
+    "customOrigins": ["https://founderhaus.org", "https://foundervillage.org"],
     "localOrigins": ["https://app.fv", "http://127.0.0.1:43913"],
     "frontendPath": "apps/founder-village-app",
     "contractSource": "packages/frontend-contracts/founder-village-app",
-    "featureFrontends": [
-      "founder-village-team"
-    ]
+    "featureFrontends": ["founder-village-team"]
   }
 ]

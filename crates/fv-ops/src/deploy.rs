@@ -11,6 +11,29 @@ pub struct Release {
     pub migrations_hash: String,
     pub images_hash: String,
 }
+
+pub fn promote_installed(root: &Path, c: &Config, revision: &str) -> Result<()> {
+    ensure!(
+        !root.join(".git").exists(),
+        "promotion requires a signed installation"
+    );
+    fv_host::assert_platform(c)?;
+    ensure!(
+        Path::new("/etc/fv-runtime-owner").is_file(),
+        "converge the host before promoting the installed release"
+    );
+    fv_host::assert_owned_host(c)?;
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join(".state/source-manifest.json"))?)?;
+    ensure!(
+        manifest["version"] == 2 && manifest["revision"] == revision,
+        "installed signed release does not match the requested revision"
+    );
+    let image = manifest["image"].as_str().context("missing signed image")?;
+    let id = prepare(root, c, revision, image)?;
+    deploy(root, c, &id)
+}
+
 pub fn prepare(root: &Path, c: &Config, revision: &str, image: &str) -> Result<String> {
     ensure!(
         revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit()),

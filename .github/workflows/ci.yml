@@ -53,5 +53,5 @@ jobs:
           docker build -f infra/images/app.Dockerfile -t fv-runtime:local .
           node scripts/smoke-containers.ts
       - run: ./target/debug/fv backup capture && ./target/debug/fv backup restore-drill
-      - if: always()
+      - if: ${{ always() && hashFiles('target/debug/fv') != '' }}
         run: ./target/debug/fv down

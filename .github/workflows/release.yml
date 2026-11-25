@@ -93,9 +93,9 @@ jobs:
           digest=$(jq -er '."containerimage.descriptor".digest' "$parts/index.json")
           printf '%s@%s\n' "$IMAGE_REPO" "$digest" > image-digest.txt
           node scripts/check-image-platforms.ts "$(cat image-digest.txt)" "$amd" "$arm"
-          cosign sign --yes "$(cat image-digest.txt)"
           git archive --format=tar --output=source.tar "$GITHUB_SHA"
           node scripts/release-manifest.ts "$parts"
+          cosign sign --yes "$(cat image-digest.txt)"
           cosign sign-blob --yes --bundle source.sigstore.json source.tar
           cosign sign-blob --yes --bundle source-manifest.sigstore.json source-manifest.json
           for arch in amd64 arm64; do

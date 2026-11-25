@@ -18,9 +18,37 @@ const origin = z
     );
   }, "origin must contain only scheme, host, and optional port");
 
-export const customOriginSchema = z
-  .string()
-  .regex(/^https:\/\/[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?\.foundervillage\.xyz$/);
+const customOriginSchema = origin.refine(
+  (value) =>
+    /^https:\/\/[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?\.foundervillage\.xyz$/.test(
+      value,
+    ),
+  "alias must be one HTTPS label below foundervillage.xyz",
+);
+
+export const customOriginFields = {
+  customOrigin: customOriginSchema.optional(),
+  customOrigins: z
+    .array(
+      z.union([
+        customOriginSchema,
+        z.literal(["https://founderhaus.org", "https://foundervillage.org"]),
+      ]),
+    )
+    .min(1)
+    .refine(
+      (values) => new Set(values).size === values.length,
+      "duplicate alias",
+    )
+    .optional(),
+};
+
+export function usesOneAliasFormat(frontend: {
+  customOrigin?: string;
+  customOrigins?: string[];
+}) {
+  return !frontend.customOrigin || !frontend.customOrigins;
+}
 
 const applicationRoutes: Partial<Record<string, RegExp>> = {
   "founder-village-app":
@@ -43,7 +71,7 @@ export const frontendSchema = z
     application: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
     pagesProject: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
     productionOrigin: origin,
-    customOrigin: customOriginSchema.optional(),
+    ...customOriginFields,
     localOrigins: z.array(origin).min(1),
     frontendPath: z.string().regex(/^apps\/[a-z][a-z0-9-]{0,62}$/),
     contractSource: z
@@ -51,7 +79,8 @@ export const frontendSchema = z
       .regex(/^packages\/frontend-contracts\/[a-z][a-z0-9-]{0,62}$/),
     featureFrontends: featureFrontendsSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine(usesOneAliasFormat, "use customOrigin or customOrigins");
 
 export type FrontendApplication = z.infer<typeof frontendSchema>;
 
@@ -74,12 +103,21 @@ const contractSources = new Set<string>();
 const origins = new Set<string>();
 const applicationsById = new Set(applications.map((entry) => entry.id));
 
-function frontendOrigins(frontend: FrontendApplication) {
+export function productionOrigins(
+  frontend: Pick<
+    FrontendApplication,
+    "productionOrigin" | "customOrigin" | "customOrigins"
+  >,
+) {
   return [
     frontend.productionOrigin,
-    ...(frontend.customOrigin ? [frontend.customOrigin] : []),
-    ...frontend.localOrigins,
+    ...(frontend.customOrigins ??
+      (frontend.customOrigin ? [frontend.customOrigin] : [])),
   ];
+}
+
+export function frontendOrigins(frontend: FrontendApplication) {
+  return [...productionOrigins(frontend), ...frontend.localOrigins];
 }
 
 export function featureFrontends(frontend: FrontendApplication) {

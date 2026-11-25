@@ -121,7 +121,12 @@ test("domain worker receives verification configuration without provider-wide cr
     "OIDC_JWKS_URL",
   ])
     assert(result.domain!.includes(`${key}=`));
-  for (const key of ["POSTGRES_PASSWORD", "HCLOUD_TOKEN", "FV_HCLOUD_TOKEN", "LOCAL_JWT_SECRET"])
+  for (const key of [
+    "POSTGRES_PASSWORD",
+    "HCLOUD_TOKEN",
+    "FV_HCLOUD_TOKEN",
+    "LOCAL_JWT_SECRET",
+  ])
     assert(!result.domain!.includes(`${key}=`));
   assert(!result.monitor!.includes("OIDC_"));
   assert(!result.monitor!.includes("RUNNER_DATABASE_URL"));

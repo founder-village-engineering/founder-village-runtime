@@ -22,6 +22,6 @@ Frontend changes require `npm run check` and `npm run test:e2e`. The Pages plan 
 
 ## Live proof
 
-Run provider inventory/provision/deploy only with explicit credentials and real public runtime/OIDC values. After upload, verify the exact `pages.dev` origin. Then separately verify a real authenticated user journey against the intended runtime and database.
+Run provider inventory/provision/deploy only with explicit credentials and real public runtime/OIDC values. The production bridge compares the public runtime with the signed revision, checks API CORS and the anonymous admin Access challenge, and verifies the configured provider's SPA callbacks and token CORS. Verify the deployed artifact at the exact Pages origin and each configured alias. Complete a real authenticated browser journey against the intended runtime and database to confirm issued bearer tokens and application membership.
 
 Name every unrun layer in the handoff: public runtime, OIDC, Cloudflare project, upload, authenticated browser, mobile viewport/device, database backup, and restore drill are distinct claims.

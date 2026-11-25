@@ -24,6 +24,8 @@ sudo bin/fv --config "$manifest" doctor
 
 Promotion binds the installed source and image, checks the registry signer, verifies the recent backup receipt and its immutable-copy completion, and checks the selected image's Linux architecture and source revision. It applies additive migrations and verifies the inactive API color before switching Caddy. The proxy must serve the expected revision and both API and admin readiness routes before the new workers are accepted. The admin image has its own pin.
 
+On a host installed from a signed bundle, `sudo bin/fv --config "$manifest" release promote --revision "$revision"` prepares and deploys the installed v2 bundle under one lock. Use the exact revision from the release workflow you intend to promote. See [Founder Village production](PRODUCTION.md) for the runtime domains, Pages release and public verification.
+
 Once the tunnel is enabled, run the public check from an independent operator device using the production API origin and the signed revision. The scheduled uptime workflow uses the repository's public `FV_PUBLIC_API_URL` variable.
 
 ```sh

@@ -40,6 +40,7 @@ const target = z.object({
   cloudflare: z.object({ ssh_domain: z.string().nullish() }),
   provider: z.object({
     architecture: z.enum(["amd64", "arm64"]).default("amd64"),
+    image: z.string(),
     existing_server: z.object({ ipv4: z.ipv4() }).optional(),
   }),
 });
@@ -199,7 +200,7 @@ try {
   const preflight = [
     "set -eu",
     ". /etc/os-release",
-    'test "$ID" = ubuntu && test "$VERSION_CODENAME" = noble',
+    `test "$ID" = ubuntu && test "ubuntu-$VERSION_ID" = ${sh(provider.image)}`,
     `test "$(dpkg --print-architecture)" = ${sh(arch)}`,
     `test "$(hostname -s)" = ${sh(project)}`,
     `if test -f /etc/fv-runtime-owner; then test "$(cat /etc/fv-runtime-owner)" = ${sh(project)}; fi`,

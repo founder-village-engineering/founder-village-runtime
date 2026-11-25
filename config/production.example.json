@@ -1,0 +1,52 @@
+{
+  "environment": "production",
+  "project": "fv-production",
+  "api_domain": "api.foundervillage.org",
+  "admin_domain": "admin.foundervillage.org",
+  "ssh_cidrs": ["127.0.0.1/32"],
+  "wireguard_cidr": "10.90.0.0/24",
+  "wireguard_port": 51827,
+  "provider": {
+    "name": "hetzner",
+    "location": "hel1",
+    "server_type": "cax11",
+    "architecture": "arm64",
+    "image": "ubuntu-26.04",
+    "ssh_key_ids": []
+  },
+  "cloudflare": {
+    "account_id": "",
+    "zone_id": "",
+    "zone_name": "foundervillage.org",
+    "managed_names": [
+      "api.foundervillage.org",
+      "admin.foundervillage.org",
+      "ssh.foundervillage.org",
+      "canary.foundervillage.org"
+    ],
+    "access_team": "",
+    "access_aud": "",
+    "ssh_domain": "ssh.foundervillage.org",
+    "cf_binary": "/opt/founder-village/node_modules/cf/bin/cf",
+    "cf_sha256": ""
+  },
+  "backup": {
+    "retention_days": 30,
+    "rpo_seconds": 300,
+    "rto_seconds": 14400,
+    "s3_endpoint": "",
+    "bucket": "",
+    "region": "",
+    "immutable_copy_confirmed": false
+  },
+  "auth": {
+    "issuer": "",
+    "audience": "",
+    "jwks_url": "",
+    "client_id": "",
+    "authorization_endpoint": "",
+    "token_endpoint": "",
+    "root_actors": [],
+    "frontend_client_ids": {}
+  }
+}

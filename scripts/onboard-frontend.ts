@@ -9,11 +9,14 @@ import {
   applications,
 } from "../packages/database/applications.ts";
 import {
-  customOriginSchema,
+  customOriginFields,
   featureFrontends,
   featureFrontendsSchema,
+  frontendOrigins,
   frontendSchema,
   frontends,
+  registeredOrigin,
+  usesOneAliasFormat,
 } from "../packages/frontends/index.ts";
 
 const run = promisify(execFile);
@@ -30,7 +33,14 @@ const manifestSchema = z
     application: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
     pagesProject: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
     productionOrigin: z.string().url(),
-    customOrigin: customOriginSchema.optional(),
+    ...customOriginFields,
+    runtimeApiOrigin: z
+      .url({ protocol: /^https$/ })
+      .refine(
+        (value) => new URL(value).origin === value,
+        "expected HTTPS origin",
+      )
+      .optional(),
     localOrigin: z.string().url(),
     localPort: z.number().int().min(1024).max(65535),
     contractSource: z
@@ -38,7 +48,8 @@ const manifestSchema = z
       .regex(/^packages\/frontend-contracts\/[a-z][a-z0-9-]{0,62}$/),
     featureFrontends: featureFrontendsSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine(usesOneAliasFormat, "use customOrigin or customOrigins");
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -132,6 +143,9 @@ async function desired(manifestPath: string, frontendsRoot: string) {
     pagesProject: manifest.pagesProject,
     productionOrigin: manifest.productionOrigin,
     ...(manifest.customOrigin ? { customOrigin: manifest.customOrigin } : {}),
+    ...(manifest.customOrigins
+      ? { customOrigins: manifest.customOrigins }
+      : {}),
     localOrigins: [
       manifest.localOrigin,
       `http://127.0.0.1:${manifest.localPort}`,
@@ -160,6 +174,13 @@ async function plan(manifestPath: string, frontendsRoot: string) {
   );
   if (existingFrontend && !equal(existingFrontend, next.frontendEntry))
     throw new Error("frontend collides with a different registration");
+  if (
+    !existingFrontend &&
+    frontendOrigins(next.frontendEntry).some((origin) =>
+      registeredOrigin(origin),
+    )
+  )
+    throw new Error("frontend origin collides with a different registration");
   const domains = JSON.parse(
     await readFile(resolve(runtimeRoot, "config/local-domains.json"), "utf8"),
   ) as Record<string, unknown>;

@@ -34,6 +34,15 @@ pub struct Provider {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub existing_server: Option<ExistingServer>,
 }
+impl Provider {
+    pub fn ubuntu_version(&self) -> Result<&str> {
+        match self.image.as_str() {
+            "ubuntu-24.04" => Ok("24.04"),
+            "ubuntu-26.04" => Ok("26.04"),
+            _ => bail!("remote runtime supports Ubuntu 24.04 and 26.04 LTS"),
+        }
+    }
+}
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Architecture {
@@ -104,6 +113,8 @@ pub struct Auth {
     pub client_id: String,
     pub authorization_endpoint: String,
     pub token_endpoint: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub frontend_client_ids: BTreeMap<String, String>,
     #[serde(default)]
     pub root_actors: Vec<String>,
 }
@@ -264,6 +275,9 @@ impl Config {
                     .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.'),
             "invalid OS image"
         );
+        if self.environment != "local" {
+            self.provider.ubuntu_version()?;
+        }
         if let Some(server) = &self.provider.existing_server {
             ensure!(
                 self.environment != "local"
@@ -334,6 +348,17 @@ impl Config {
                     && !self.auth.audience.is_empty()
                     && !self.backup.bucket.is_empty(),
                 "identity and backup provider required"
+            );
+            ensure!(
+                self.auth.frontend_client_ids.iter().all(|(app, client)| {
+                    identifier(app)
+                        && !client.is_empty()
+                        && client.len() <= 256
+                        && !client.chars().any(|c| c.is_whitespace() || c.is_control())
+                        && client != &self.auth.client_id
+                        && client != &self.auth.audience
+                }),
+                "frontend OAuth clients must be distinct from the admin client and API audience"
             );
             ensure!(
                 self.backup.immutable_copy_confirmed,

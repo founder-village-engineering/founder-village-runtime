@@ -142,6 +142,7 @@ def check_app(runtime: Path, frontends: Path, app: str) -> dict[str, object]:
         "manifest slug": manifest["slug"] == app,
         "pages origin": manifest["productionOrigin"] == expected_origin,
         "exact custom origin": manifest.get("customOrigin") == registration.get("customOrigin"),
+        "exact custom origins": manifest.get("customOrigins", []) == registration.get("customOrigins", []),
         "runtime pages origin": registration["productionOrigin"] == expected_origin,
         "application mapping": manifest["application"] == registration["application"],
         "feature mappings": manifest.get("featureFrontends", []) == registration.get("featureFrontends", []),
