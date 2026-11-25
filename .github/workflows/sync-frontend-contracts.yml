@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
     paths:
+      - .github/workflows/sync-frontend-contracts.yml
       - config/applications.json
       - config/frontends.json
       - packages/frontend-contracts/**
@@ -17,18 +18,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Require the cross-repository token
-        env:
-          SYNC_TOKEN: ${{ secrets.FOUNDER_VILLAGE_FRONTENDS_SYNC_TOKEN }}
-        run: test -n "$SYNC_TOKEN"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           path: runtime
+          persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: founder-village-engineering/founder-village-frontends
           path: frontends
-          token: ${{ secrets.FOUNDER_VILLAGE_FRONTENDS_SYNC_TOKEN }}
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           {
@@ -50,9 +48,13 @@ jobs:
           GH_TOKEN: ${{ secrets.FOUNDER_VILLAGE_FRONTENDS_SYNC_TOKEN }}
           RUNTIME_SHA: ${{ github.sha }}
         run: |
-          if git diff --quiet; then
+          if [[ -z "$(git status --porcelain -- 'apps/*/src/generated/contracts')" ]]; then
             echo "Frontend contracts already match runtime $RUNTIME_SHA"
             exit 0
+          fi
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::error::Configure FOUNDER_VILLAGE_FRONTENDS_SYNC_TOKEN to publish updated generated contracts."
+            exit 1
           fi
           BRANCH="automation/runtime-contracts-${RUNTIME_SHA::12}"
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
@@ -72,7 +74,7 @@ jobs:
           git switch -c "$BRANCH"
           git add apps/*/src/generated/contracts
           git commit -m "Sync runtime frontend contracts"
-          git push --set-upstream origin "$BRANCH"
+          git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push --set-upstream origin "$BRANCH"
           gh pr create \
             --repo founder-village-engineering/founder-village-frontends \
             --base main \
