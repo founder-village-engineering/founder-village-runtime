@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import frontendRegistry from "../../config/frontends.json" with { type: "json" };
 import { applications } from "../database/applications.ts";
 
 const origin = z
@@ -84,17 +83,7 @@ export const frontendSchema = z
 
 export type FrontendApplication = z.infer<typeof frontendSchema>;
 
-export const frontends = z
-  .array(frontendSchema)
-  .min(1)
-  .parse(
-    JSON.parse(
-      readFileSync(
-        fileURLToPath(new URL("../../config/frontends.json", import.meta.url)),
-        "utf8",
-      ),
-    ),
-  );
+export const frontends = z.array(frontendSchema).min(1).parse(frontendRegistry);
 
 const ids = new Set<string>();
 const projects = new Set<string>();

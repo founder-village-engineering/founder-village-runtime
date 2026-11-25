@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type pg from "pg";
+import applicationRegistry from "../../config/applications.json" with { type: "json" };
 import { pool } from "./index.ts";
 export const applicationSchema = z
   .object({
@@ -14,16 +13,7 @@ export const applicationSchema = z
 export const applications = z
   .array(applicationSchema)
   .min(1)
-  .parse(
-    JSON.parse(
-      readFileSync(
-        fileURLToPath(
-          new URL("../../config/applications.json", import.meta.url),
-        ),
-        "utf8",
-      ),
-    ),
-  );
+  .parse(applicationRegistry);
 if (
   new Set(applications.map((a) => a.id)).size !== applications.length ||
   new Set(applications.map((a) => a.database)).size !== applications.length ||

@@ -3,6 +3,7 @@ WORKDIR /app
 COPY package.json package-lock.json tsconfig.json ./
 COPY services/admin-web/package.json services/admin-web/package.json
 RUN npm ci
+COPY config/applications.json config/frontends.json config/
 COPY packages packages
 COPY services services
 COPY scripts scripts
@@ -19,7 +20,6 @@ COPY --from=build --chown=65532:65532 /app/dist dist
 COPY --from=build --chown=65532:65532 /app/node_modules node_modules
 COPY --from=build --chown=65532:65532 /app/services/admin-web/dist services/admin-web/dist
 COPY package.json ./
-COPY config/applications.json config/frontends.json dist/config/
 COPY config/local-domains.json config/local-domains.json
 COPY database database
 COPY hasura hasura
