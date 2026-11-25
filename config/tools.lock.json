@@ -1,8 +1,8 @@
 {
   "node": {
-    "version": "24.22.0",
-    "linux-x64": "cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008",
-    "linux-arm64": "fef00bb4d36e1c50104a9775a10359beee98f162b4104dd12472c75065c6a143"
+    "version": "24.22.3",
+    "linux-x64": "4f2b175a6d53a5c617a80dba2676238a0688cef28c6da4eba35c7d844e66fcfb",
+    "linux-arm64": "6e51a2ada00f0011cc266f65d98922b403d7ad88f809ca2aa615a5fe1ce6e86c"
   },
   "cf": {
     "version": "1.0.0-rc.0",

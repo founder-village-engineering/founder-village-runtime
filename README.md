@@ -31,7 +31,7 @@ The two product apps are Founder Village and Founder Village Team. `founder-vill
 
 ## Local startup
 
-Requires Docker, Rust 1.90.0, and Node 24.22.0. The CLI never removes data volumes during normal shutdown. Local resources use the separate `fv-local` Compose project.
+Requires Docker, Rust 1.90.0, and Node 24.22.3. The CLI never removes data volumes during normal shutdown. Local resources use the separate `fv-local` Compose project.
 
 ```sh
 npm ci

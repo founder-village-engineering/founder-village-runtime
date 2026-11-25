@@ -1,4 +1,4 @@
-FROM node:24.22.0-bookworm-slim@sha256:91acba91b842bec0bf7ea6f5e09c644c7ccad72c4996ed9616d861d1c7cd60d4 AS build
+FROM node:24.22.3-bookworm-slim@sha256:873f586f3794f52281bd039bf02c048a0be08fde619338f9941bad1eb6b34530 AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.json ./
 COPY services/admin-web/package.json services/admin-web/package.json
@@ -8,8 +8,10 @@ COPY packages packages
 COPY services services
 COPY scripts scripts
 COPY tests tests
-RUN npm run build && npm prune --omit=dev
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2
+# Solana's optional typing peer can keep the native compiler after npm prune.
+RUN npm run build && npm prune --omit=dev \
+    && rm -rf node_modules/typescript node_modules/@typescript/typescript-linux-*
+FROM cgr.dev/chainguard/glibc-dynamic:latest@sha256:838b58dceeba88a5dc8b088bca1a2e1e8e26ebe88d5e23a87137de09cc910e61
 ARG FV_REVISION=local
 LABEL org.opencontainers.image.revision=${FV_REVISION}
 ENV NODE_ENV=production

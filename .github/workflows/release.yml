@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with: { persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with: { node-version: 24.22.0, cache: npm }
+        with: { node-version: 24.22.3, cache: npm }
       - run: npm ci
       - run: rustup toolchain install 1.90.0 --profile minimal && cargo build --release --locked -p fv-cli
       - name: Build and exercise native artifacts
@@ -72,7 +72,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with: { fetch-depth: 0, persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with: { node-version: 24.22.0 }
+        with: { node-version: 24.22.3 }
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
         with:
           { pattern: "native-*", path: "${{ runner.temp }}/fv-release/parts" }

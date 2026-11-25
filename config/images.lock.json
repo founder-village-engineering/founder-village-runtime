@@ -4,7 +4,7 @@
   "rabbitmq": "rabbitmq:4.3-management@sha256:8e913a7748f808be4ce117c3df11817935775bcd83934d4de92441a7e93e9899",
   "caddy": "caddy:2.11.9@sha256:4e2425f6009577e7c651010f16679c28f7d12df3e7b1914f941a7a3370746b3c",
   "coredns": "coredns/coredns:1.15.0@sha256:0a9d8c8ddf34347eb59aad9a8784f0710de88d6d112726d11d271f9bc6daca26",
-  "node": "node:24.22.0-bookworm-slim@sha256:91acba91b842bec0bf7ea6f5e09c644c7ccad72c4996ed9616d861d1c7cd60d4",
-  "app_runtime": "gcr.io/distroless/cc-debian13:nonroot@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2",
+  "node": "node:24.22.3-bookworm-slim@sha256:873f586f3794f52281bd039bf02c048a0be08fde619338f9941bad1eb6b34530",
+  "app_runtime": "cgr.dev/chainguard/glibc-dynamic:latest@sha256:838b58dceeba88a5dc8b088bca1a2e1e8e26ebe88d5e23a87137de09cc910e61",
   "cloudflared": "cloudflare/cloudflared:2026.11.0@sha256:b94b96edf2c9c4360f8879c8580cfaa99077f19c849ec595ca2f711b27d4f344"
 }
