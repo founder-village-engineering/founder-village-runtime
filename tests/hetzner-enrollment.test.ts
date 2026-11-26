@@ -4,8 +4,35 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { browserToken } from "../scripts/production/browser-token.ts";
 import { enrollHetzner } from "../scripts/production/enroll-hetzner.ts";
 import { publish } from "../scripts/production/workstation.ts";
+
+test("the one-use browser form accepts only its own origin and submission nonce", async () => {
+  let received!: Promise<string>;
+  const url = new URL(
+    await new Promise<string>((ready) => {
+      received = browserToken("cloudflare", ready);
+    }),
+  );
+  assert.equal(url.hostname, "127.0.0.1");
+  const page = await fetch(url);
+  assert.equal(page.headers.get("cache-control"), "no-store");
+  const html = await page.text();
+  assert.match(html, /Temporary Cloudflare issuer token/);
+  const nonce = /<script nonce="([A-Za-z0-9_-]+)">/.exec(html)![1]!;
+  const fixture = randomUUID();
+  const post = (origin: string, csrf: string) =>
+    fetch(new URL("/enroll", url), {
+      method: "POST",
+      headers: { origin, "x-fv-csrf": csrf, "content-type": "text/plain" },
+      body: fixture,
+    });
+  assert.equal((await post("https://untrusted.example", nonce)).status, 403);
+  assert.equal((await post(url.origin, "wrong")).status, 403);
+  assert.equal((await post(url.origin, nonce)).status, 204);
+  assert.equal(await received, fixture);
+});
 
 test("Hetzner enrollment writes the new token only after a matching candidate audit", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "fv-enroll-test-"));

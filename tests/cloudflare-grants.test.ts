@@ -87,13 +87,20 @@ else if(["create","edit"].includes(args[0])) fs.writeFileSync(file,JSON.stringif
     { mode: 0o600 },
   );
   const script = resolve("scripts/production/vaultwarden.ts");
-  const run = (delegated = false) =>
+  const run = (delegated = false, browser = false) =>
     spawnSync(
       process.execPath,
-      ["--import", import.meta.resolve("tsx"), script, "issue-cloudflare"],
+      [
+        "--import",
+        import.meta.resolve("tsx"),
+        script,
+        "issue-cloudflare",
+        ...(browser ? ["--browser"] : []),
+      ],
       {
         cwd: root,
         encoding: "utf8",
+        timeout: 15_000,
         env: {
           PATH: process.env.PATH,
           HOME: temp,
@@ -129,4 +136,36 @@ else if(["create","edit"].includes(args[0])) fs.writeFileSync(file,JSON.stringif
   for (const name of finished)
     assert.equal((await stat(join(mount, name))).mode & 0o777, 0o600);
   assert.ok(!complete.stdout.includes("test-only-"));
+  const stateDir = join(temp, "operator/cloudflare-authority");
+  const values = Object.fromEntries(
+    await Promise.all(
+      finished.map(async (name) => [
+        name,
+        (await readFile(join(mount, name), "utf8")).trim(),
+      ]),
+    ),
+  );
+  const saveState = () =>
+    writeFile(
+      join(stateDir, "production.tfstate"),
+      JSON.stringify({ outputs: { bindings: { value: values } } }),
+      { mode: 0o600 },
+    );
+  await writeFile(
+    join(stateDir, "custody.json"),
+    JSON.stringify({ account: "a".repeat(32) }),
+    { mode: 0o600 },
+  );
+  await saveState();
+  await rm(join(mount, finished[0]!));
+  const repeat = run(false, true);
+  assert.equal(repeat.status, 0, repeat.stderr);
+  assert.deepEqual(JSON.parse(repeat.stdout).verifiedInVault, finished);
+  assert.equal(
+    (await readFile(join(mount, finished[0]!), "utf8")).trim(),
+    values[finished[0]!],
+  );
+  values[finished[0]!] = "conflicting-fixture";
+  await saveState();
+  assert.match(run().stderr, /disagree with the pinned Terraform state/);
 });

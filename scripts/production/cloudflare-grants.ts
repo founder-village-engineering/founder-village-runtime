@@ -36,7 +36,10 @@ const policy = z.object({
 });
 const names = z.enum(cloudflareGrantNames);
 
-export async function issueCloudflareGrants(home: string) {
+export async function issueCloudflareGrants(
+  home: string,
+  requestIssuer?: () => Promise<string>,
+) {
   const root = process.cwd();
   const account = await accountPin(root);
   if (!account)
@@ -74,7 +77,56 @@ export async function issueCloudflareGrants(home: string) {
     throw new BootstrapError(
       "Keep the protected runner mount outside the checkout.",
     );
-  const issuer = await credential("FV_CF_TOKEN_ISSUER");
+  async function project(grants: Map<string, string>) {
+    for (const [name, value] of grants) {
+      const file = join(directory, name);
+      if ((await exists(file)) && (await privateText(file)).trim() === value)
+        continue;
+      await publish(file, value + "\n");
+    }
+    return { available: grants, unavailable: [] };
+  }
+  const managedState = join(authority, "production.tfstate");
+  const managed = await exists(managedState);
+  const savedGrants = new Map<string, string>();
+  for (const name of names.options) {
+    const saved = await credential(name);
+    if (saved) savedGrants.set(name, saved);
+  }
+  const configuredIssuer = await credential("FV_CF_TOKEN_ISSUER");
+  const complete = savedGrants.size === names.options.length;
+  if (managed && complete && !configuredIssuer) {
+    await stage(
+      "The saved Cloudflare grants disagree with the pinned Terraform state.",
+      async () => {
+        z.object({ account: z.literal(account) }).parse(
+          JSON.parse(await privateText(join(authority, "custody.json"))),
+        );
+        const state = z
+          .object({
+            outputs: z.object({
+              bindings: z.object({ value: z.record(names, z.string().min(1)) }),
+            }),
+          })
+          .parse(JSON.parse(await privateText(managedState)));
+        for (const [name, value] of savedGrants)
+          if (state.outputs.bindings.value[names.parse(name)] !== value)
+            throw new Error("Grant mismatch");
+      },
+    );
+    return project(savedGrants);
+  }
+  const temporaryIssuer =
+    !complete && requestIssuer ? await requestIssuer() : undefined;
+  if (
+    configuredIssuer &&
+    temporaryIssuer &&
+    configuredIssuer !== temporaryIssuer
+  )
+    throw new BootstrapError(
+      "The submitted issuer conflicts with the configured Cloudflare issuer.",
+    );
+  const issuer = temporaryIssuer ?? configuredIssuer;
   if (issuer) {
     const work = await mkdtemp(join(home, ".issue-cloudflare-"));
     try {
@@ -82,21 +134,16 @@ export async function issueCloudflareGrants(home: string) {
         "Delegated Cloudflare grant issuance failed.",
         () => issueGrants(root, home, work, true, issuer),
       );
-      for (const name of names.options) {
-        const file = join(directory, name);
-        if (
-          (await exists(file)) &&
-          (await privateText(file)).trim() === issued[name]
-        )
-          continue;
-        await publish(file, issued[name] + "\n");
-      }
-      return { available: new Map(Object.entries(issued)), unavailable: [] };
+      if (Object.values(issued).includes(issuer))
+        throw new BootstrapError(
+          "The Cloudflare issuer must be separate from the scoped grants.",
+        );
+      return project(new Map(Object.entries(issued)));
     } finally {
       await rm(work, { recursive: true, force: true });
     }
   }
-  if (await exists(join(authority, "production.tfstate")))
+  if (managed)
     throw new BootstrapError(
       "Supply the delegated issuer for the existing Terraform-managed Cloudflare grants.",
     );
@@ -173,7 +220,7 @@ export async function issueCloudflareGrants(home: string) {
   const unavailable: string[] = [];
   await privateDirectory(authority);
   for (const name of names.options) {
-    const saved = await credential(name);
+    const saved = savedGrants.get(name);
     if (saved) {
       available.set(name, saved);
       continue;

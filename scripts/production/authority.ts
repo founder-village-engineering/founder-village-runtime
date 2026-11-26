@@ -134,14 +134,19 @@ export async function issueGrants(
       join(dir, file),
     );
   const env = {
-    CLOUDFLARE_API_TOKEN: cloudIssuer,
     TF_IN_AUTOMATION: "1",
     TF_INPUT: "0",
     TF_CLI_CONFIG_FILE: "/dev/null",
     TF_DATA_DIR: join(stateDir, "providers"),
   };
-  const tf = (args: string[]) =>
-    run("terraform", ["-chdir=" + dir, ...args], env, undefined, 900_000);
+  const tf = (args: string[], authorizeProvider = false) =>
+    run(
+      "terraform",
+      ["-chdir=" + dir, ...args],
+      authorizeProvider ? { ...env, CLOUDFLARE_API_TOKEN: cloudIssuer } : env,
+      undefined,
+      900_000,
+    );
   try {
     await tf([
       "init",
@@ -154,15 +159,18 @@ export async function issueGrants(
       const variables = join(dir, "authority.tfvars.json"),
         plan = join(dir, "authority.plan");
       await publish(variables, json(vars));
-      await tf([
-        "plan",
-        "-input=false",
-        "-lock-timeout=30s",
-        "-var-file=" + variables,
-        "-out=" + plan,
-      ]);
+      await tf(
+        [
+          "plan",
+          "-input=false",
+          "-lock-timeout=30s",
+          "-var-file=" + variables,
+          "-out=" + plan,
+        ],
+        true,
+      );
       checkGrantPlan(JSON.parse(await tf(["show", "-json", plan])));
-      await tf(["apply", "-input=false", plan]);
+      await tf(["apply", "-input=false", plan], true);
     }
     const issued = grants.parse(
       JSON.parse(await tf(["output", "-json", "bindings"])),

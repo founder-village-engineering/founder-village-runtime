@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { browserToken } from "./browser-token.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -91,20 +92,29 @@ export async function enrollHetzner(
   await vault.merge(new Map([[tokenName, token]]));
 }
 
-async function main() {
-  if (process.argv.length !== 2 || process.stdin.isTTY)
-    throw new BootstrapError("Supply the Hetzner token on private stdin.");
+async function pipedToken() {
+  if (process.stdin.isTTY)
+    throw new BootstrapError(
+      "Supply the Hetzner token on private stdin or select --browser.",
+    );
   let input = "";
   for await (const chunk of process.stdin) {
     input += chunk.toString("utf8");
     if (input.length > 2050)
       throw new BootstrapError("Invalid Hetzner token input.");
   }
-  const token = input.replace(/\r?\n$/, "");
+  return input.replace(/\r?\n$/, "");
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  if (args.length > 1 || (args.length === 1 && args[0] !== "--browser"))
+    throw new BootstrapError("Usage: production:enroll-hetzner [--browser]");
+  const token = args.length
+    ? await browserToken("hetzner")
+    : await pipedToken();
   if (!/^[!-~]{1,2048}$/.test(token))
-    throw new BootstrapError(
-      "Supply exactly one Hetzner token on private stdin.",
-    );
+    throw new BootstrapError("Supply exactly one Hetzner token.");
   process.chdir(root);
   const vault = (await openProductionVault(true))!;
   await enrollHetzner(token, vault);

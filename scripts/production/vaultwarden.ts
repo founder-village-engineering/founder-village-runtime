@@ -5,6 +5,7 @@ import { isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
+import { browserToken } from "./browser-token.ts";
 import { distributedBindings } from "./bindings.ts";
 import { accountPin, credentialPreflight } from "./discovery.ts";
 import {
@@ -379,8 +380,12 @@ async function inviteWorkstationUser() {
 
 async function main() {
   const [command, ...extra] = process.argv.slice(2);
+  const browser =
+    command === "issue-cloudflare" &&
+    extra.length === 1 &&
+    extra[0] === "--browser";
   if (
-    extra.length ||
+    (extra.length && !browser) ||
     ![
       "workstation",
       "workstation-invite",
@@ -391,7 +396,7 @@ async function main() {
     ].includes(command ?? "")
   )
     throw new BootstrapError(
-      "Usage: npm run production:vault -- workstation|workstation-invite|issue-cloudflare|import|project|status",
+      "Usage: npm run production:vault -- workstation|workstation-invite|issue-cloudflare [--browser]|import|project|status",
     );
   if (command === "workstation") return startWorkstationVault();
   if (command === "workstation-invite") return inviteWorkstationUser();
@@ -406,7 +411,10 @@ async function main() {
     try {
       useVaultwardenBindings((await vault.read()).values);
       const { issueCloudflareGrants } = await import("./cloudflare-grants.ts");
-      const { available, unavailable } = await issueCloudflareGrants(home);
+      const { available, unavailable } = await issueCloudflareGrants(
+        home,
+        browser ? () => browserToken("cloudflare") : undefined,
+      );
       await vault.merge(available);
       process.stdout.write(
         json({ verifiedInVault: [...available.keys()], unavailable }),
