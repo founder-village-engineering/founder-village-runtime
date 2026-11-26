@@ -172,7 +172,7 @@ export async function cloudBinding(
           primary.account.id +
           "/access/apps?domain=" +
           encodeURIComponent(adminDomain) +
-          "&exact=true&per_page=2",
+          "&exact=true&per_page=5",
       ),
     );
   return {

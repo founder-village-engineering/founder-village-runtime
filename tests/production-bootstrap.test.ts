@@ -489,7 +489,10 @@ test("A machine generates a complete private production profile and reuses trust
           ],
         });
       }
-      if (u.pathname.endsWith("/access/apps"))
+      if (u.pathname.endsWith("/access/apps")) {
+        assert.equal(u.searchParams.get("domain"), "admin.foundervillage.org");
+        assert.equal(u.searchParams.get("exact"), "true");
+        assert(Number(u.searchParams.get("per_page")) >= 5);
         return Response.json({
           success: true,
           result: (await exists(join(temp, "close-attempt")))
@@ -503,6 +506,7 @@ test("A machine generates a complete private production profile and reuses trust
               ]
             : [],
         });
+      }
       assert.equal(
         u.pathname,
         "/client/v4/accounts/" + cfAccount + "/access/organizations",
