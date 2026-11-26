@@ -620,6 +620,8 @@ async function scanAppImage(
       "type=bind,source=" + report + ",target=/report",
       scannerImage,
       "image",
+      "--timeout",
+      "20m",
       "--cache-dir",
       "/cache",
       "--no-progress",
