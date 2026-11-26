@@ -307,6 +307,16 @@ if (process.argv[2] === "--synthetic-ssh") {
       const downloads = await shaCount("export");
       await assert.rejects(command("pull"));
       assert.equal(await shaCount("export"), downloads);
+      const oversized = { ...second, size: Number.MAX_SAFE_INTEGER };
+      await privateFile(
+        join(temp, "descriptor"),
+        compact({ ...oversized, signature: hmac(key, body(oversized)) }),
+      );
+      await assert.rejects(
+        command("pull"),
+        /Insufficient workstation disk space/,
+      );
+      assert.equal(await shaCount("export"), downloads);
       await privateFile(join(temp, "descriptor"), saved);
       await privateFile(join(temp, "archive"), Buffer.alloc(nextBytes.length));
       await assert.rejects(command("pull")); // Signed descriptor but corrupted transfer.

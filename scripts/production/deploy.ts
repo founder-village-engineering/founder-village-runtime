@@ -332,7 +332,8 @@ export async function deploy(p: Production) {
       .parse(JSON.parse(await hostRun(host, cli + " backup export-info")))
       .backup;
   const verifyWorkstationRecovery = async (host: string) => {
-    const id = await snapshotId(host).catch(async () => {
+    const id = await snapshotId(host).catch(async (error: unknown) => {
+      if ((error as { code?: unknown }).code !== 1) throw error;
       await captureBackup(host);
       return snapshotId(host);
     });

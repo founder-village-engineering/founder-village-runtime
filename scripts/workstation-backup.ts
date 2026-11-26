@@ -11,8 +11,9 @@ import {
   rename,
   rm,
   rmdir,
+  statfs,
 } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -274,6 +275,11 @@ async function connection(
   };
 }
 async function download(path: string, d: Descriptor, transfer: Transfer) {
+  const space = await statfs(dirname(path), { bigint: true });
+  if (space.bavail * space.bsize < BigInt(d.size) + 1024n ** 3n)
+    throw new BootstrapError(
+      "Insufficient workstation disk space for the verified backup size.",
+    );
   let size = 0;
   await transfer("export", async (child) => {
     child.stdin.end();
