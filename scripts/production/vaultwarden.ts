@@ -8,6 +8,7 @@ import { z } from "zod";
 import { distributedBindings } from "./bindings.ts";
 import { accountPin, credentialPreflight } from "./discovery.ts";
 import {
+  acquireWorkstationLock,
   BootstrapError,
   credentialDirectory,
   exists,
@@ -19,6 +20,7 @@ import {
   run,
   stage,
   workstationDirectory,
+  useVaultwardenBindings,
 } from "./workstation.ts";
 
 const productionVault = "https://vault.foundervillage.org";
@@ -181,7 +183,7 @@ export async function openProductionVault(required = false) {
     return { record, values };
   }
 
-  async function merge(incoming: ReadonlyMap<string, string>) {
+  async function mergeFields(incoming: ReadonlyMap<string, string>) {
     const { record, values } = await read();
     let added = 0;
     for (const [name, value] of incoming) {
@@ -219,6 +221,20 @@ export async function openProductionVault(required = false) {
         "Vaultwarden production binding read-back failed.",
       );
     return { added, values: verified };
+  }
+
+  async function merge(incoming: ReadonlyMap<string, string>) {
+    // Each provider enrolls fields on the same note. Serialize the complete
+    // read/edit/read-back sequence for commands using this workstation profile.
+    const db = await acquireWorkstationLock(
+      join(selected.profile, "production-bindings.lock"),
+      "Another enrollment is updating the Vaultwarden item.",
+    );
+    try {
+      return await mergeFields(incoming);
+    } finally {
+      db.close();
+    }
   }
   return { read, merge };
 }
@@ -368,17 +384,39 @@ async function main() {
     ![
       "workstation",
       "workstation-invite",
+      "issue-cloudflare",
       "import",
       "project",
       "status",
     ].includes(command ?? "")
   )
     throw new BootstrapError(
-      "Usage: npm run production:vault -- workstation|workstation-invite|import|project|status",
+      "Usage: npm run production:vault -- workstation|workstation-invite|issue-cloudflare|import|project|status",
     );
   if (command === "workstation") return startWorkstationVault();
   if (command === "workstation-invite") return inviteWorkstationUser();
   const vault = (await openProductionVault(true))!;
+  if (command === "issue-cloudflare") {
+    process.umask(0o077);
+    const home = await workstationDirectory(process.cwd());
+    const lock = await acquireWorkstationLock(
+      join(home, "bootstrap.lock"),
+      "Another production operation holds the workstation lock.",
+    );
+    try {
+      useVaultwardenBindings((await vault.read()).values);
+      const { issueCloudflareGrants } = await import("./cloudflare-grants.ts");
+      const { available, unavailable } = await issueCloudflareGrants(home);
+      await vault.merge(available);
+      process.stdout.write(
+        json({ verifiedInVault: [...available.keys()], unavailable }),
+      );
+      process.exitCode = unavailable.length ? 1 : 0;
+    } finally {
+      lock.close();
+    }
+    return;
+  }
   const result =
     command === "import"
       ? await vault.merge(await workstationBindings())

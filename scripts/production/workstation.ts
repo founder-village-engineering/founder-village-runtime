@@ -177,6 +177,21 @@ export async function publish(file: string, contents: string, replace = false) {
   }
 }
 
+// SQLite releases the advisory write lock when the process or handle closes.
+export async function acquireWorkstationLock(path: string, busyMessage: string) {
+  if (!(await exists(path))) await publish(path, "");
+  await privateText(path);
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(path);
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    return db;
+  } catch {
+    db.close();
+    throw new BootstrapError(busyMessage);
+  }
+}
+
 export function credentialDirectory() {
   return (
     process.env.CREDENTIALS_DIRECTORY ??

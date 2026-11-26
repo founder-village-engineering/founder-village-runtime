@@ -26,6 +26,12 @@ The preflight reports missing or unreadable machine credentials by name and exit
 
 ### Resume a release blocked at preflight
 
+On a first deployment, a missing binding often means its resource or grant still needs to be created. Start with an authenticated administrator for each provider. In Hetzner, create the deployment token in the project that contains the pinned VM and enroll it directly into Vaultwarden. [First Hetzner token enrollment](PROVISIONING.md#1-bind-the-existing-vm-and-its-network)
+
+At the chosen identity provider, register separate public clients for the administration console and the app, enable authorization code with S256 PKCE, and register the API audience. The admin client redirects to the configured admin origin at `/auth/callback`. The app client uses that path on each registered production app origin. Set the approved administrator email policy and use the assurance value actually issued after the required MFA. [Administrator sign-in requirements](ADMIN_SECURITY.md)
+
+For storage, use provider administration sessions to create a private primary backup bucket, a versioned Object Lock mirror under independent ownership, and a private audit bucket that accepts conditional, server-side encrypted writes. Issue separate credentials for the three jobs. [Immutable backup writes](../../scripts/replicate-backups.ts) · [Audit archive writes](../../packages/operations/audit.ts)
+
 Use the production runner's preflight report to route each `missing` or `invalid` name to the authority below. Each authority supplies its issued value as a hidden field in the bound Vaultwarden item or as an owner-only file of the same name in the protected runner mount. Keep values in those channels. The required set contains 26 names. [Binding definitions](../../scripts/production/bindings.ts)
 
 | Supplying authority | Required bindings |
@@ -98,6 +104,14 @@ With a file projection, use mode `0700` on the directory and mode `0600` on each
 Hetzner issues the initial API token inside its project. A machine secret broker can deliver an existing grant on every run. A fresh local key cannot authenticate to an existing VM until that VM has enrolled its public key or trusts a separate enrollment identity. [Hetzner API token issuance](https://docs.hetzner.com/cloud/api/getting-started/generating-api-token/) · [Cloudflare Access service tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/)
 
 ### Generate provider grants
+
+For a first deployment, a release operator can use the pinned `cf` CLI's named `founder-village-release` OAuth profile. Authorize token creation and the DNS, Pages, Tunnel and Access permissions in the Founder account. Cloudflare reports which permissions the profile can delegate on each account and zone. [Cloudflare token provisioning](https://developers.cloudflare.com/changelog/post/2026-10-01-account-api-token-provisioning/)
+
+```sh
+npm run production:vault -- issue-cloudflare
+```
+
+When the runner already has a delegated `FV_CF_TOKEN_ISSUER`, the same command uses the locked Terraform configuration and its persistent workstation state. The command works before the other providers are ready. It verifies both active zones against the private account pin and uses the [same policies as Terraform](../../infra/production-authority/grants.json). It writes each issued token to the owner-only runner mount, merges the available bindings into Vaultwarden and verifies them by reading the item back. An exit status of 1 with `unavailable` names identifies roles the current profile could not issue. Re-running the command preserves available bindings and attempts the outstanding roles. If the provider may have created a token before its value reached the mount, reconcile the named provider token and the private issuance marker before retrying.
 
 The optional Cloudflare credential issuer uses a delegated Founder Village account token with account-token management and visibility of both active zones. It creates dedicated DNS, Tunnel and Pages credentials in that account. Its Terraform state and plans stay in the workstation's protected directory. The runner checks the saved plan before applying and stops on deletions and replacements. [Cloudflare grant configuration](../../infra/production-authority/cloudflare.tf)
 

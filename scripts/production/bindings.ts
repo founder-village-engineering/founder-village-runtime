@@ -1,3 +1,10 @@
+export const cloudflareGrantNames = [
+  "CF_READ_TOKEN",
+  "CF_WRITE_TOKEN",
+  "FV_PAGES_API_TOKEN",
+  "CLOUDFLARE_PROVISION_TOKEN",
+] as const;
+
 export const hostRequired = [
   "CF_READ_TOKEN",
   "CF_WRITE_TOKEN",

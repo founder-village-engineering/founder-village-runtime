@@ -34,6 +34,7 @@
     "frontend:add": "node --import tsx scripts/onboard-frontend.ts",
     "frontend:production": "node --import tsx scripts/frontend-production.ts",
     "production:bootstrap": "node scripts/production-entry.ts",
+    "production:enroll-hetzner": "node --import tsx scripts/production/enroll-hetzner.ts",
     "production:vault": "node --import tsx scripts/production/vaultwarden.ts",
     "hasura:generate": "node --import tsx scripts/generate-hasura.ts",
     "frontend-contracts:validate": "node --import tsx scripts/sync-frontend-contracts.ts --validate",

@@ -1,0 +1,23 @@
+{
+  "CF_READ_TOKEN": [
+    { "target": "runtimeZone", "groups": ["Zone Read", "DNS Read"] }
+  ],
+  "CF_WRITE_TOKEN": [
+    { "target": "runtimeZone", "groups": ["Zone Read", "DNS Write"] }
+  ],
+  "FV_PAGES_API_TOKEN": [
+    { "target": "bothZones", "groups": ["Zone Read", "DNS Write"] },
+    { "target": "account", "groups": ["Pages Write"] }
+  ],
+  "CLOUDFLARE_PROVISION_TOKEN": [
+    {
+      "target": "account",
+      "groups": [
+        "Cloudflare Tunnel Write",
+        "Access: Apps and Policies Write",
+        "Access: Service Tokens Write",
+        "Access: Organizations Read"
+      ]
+    }
+  ]
+}

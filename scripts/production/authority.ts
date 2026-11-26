@@ -1,9 +1,11 @@
 import { copyFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+import { cloudflareGrantNames } from "./bindings.ts";
 import { accountPin, apexZones, cloudApi } from "./discovery.ts";
 import {
   BootstrapError,
+  credential,
   exists,
   json,
   privateDirectory,
@@ -39,6 +41,42 @@ export async function issueGrants(
   apply: boolean,
   cloudIssuer: string,
 ) {
+  const stateDir = join(home, "cloudflare-authority");
+  const state = join(stateDir, "production.tfstate");
+  const managed = await exists(state);
+  const supplied = new Map<string, string>();
+  for (const name of cloudflareGrantNames) {
+    const value = await credential(name);
+    if (value) supplied.set(name, value);
+  }
+  const grants = z.record(
+    z.enum(cloudflareGrantNames),
+    z.string().regex(/^[!-~]+$/),
+  );
+  if (!managed && supplied.size) {
+    if (supplied.size === cloudflareGrantNames.length)
+      return grants.parse(Object.fromEntries(supplied));
+    throw new BootstrapError(
+      "Reconcile the existing Cloudflare bindings before starting a new Terraform grant set.",
+    );
+  }
+  if (!apply && !managed)
+    throw new BootstrapError(
+      "The provider grants have not been issued yet. The apply action creates them from the runner's delegated identities.",
+    );
+  if (
+    apply &&
+    (await run("git", [
+      "-C",
+      root,
+      "status",
+      "--porcelain",
+      "--untracked-files=normal",
+    ]))
+  )
+    throw new BootstrapError(
+      "Grant issuance requires a clean runtime checkout.",
+    );
   const cf = cloudApi(cloudIssuer),
     expected = await accountPin(root);
   const zones = await Promise.all(
@@ -81,22 +119,14 @@ export async function issueGrants(
     permission_groups: permissions,
     zone_ids: Object.fromEntries(zones.map((zone) => [zone.name, zone.id])),
   };
-  const stateDir = join(home, "cloudflare-authority"),
-    dir = join(work, "terraform");
+  const dir = join(work, "terraform");
   await privateDirectory(stateDir);
-  await publish(
-    join(stateDir, "custody.json"),
-    json({ account }),
-  );
-  const state = join(stateDir, "production.tfstate");
-  if (!apply && !(await exists(state)))
-    throw new BootstrapError(
-      "The provider grants have not been issued yet. The apply action creates them from the runner's delegated identities.",
-    );
+  await publish(join(stateDir, "custody.json"), json({ account }));
   await privateDirectory(dir);
   for (const file of [
     "main.tf",
     "cloudflare.tf",
+    "grants.json",
     ".terraform.lock.hcl",
   ])
     await copyFile(
@@ -134,9 +164,16 @@ export async function issueGrants(
       checkGrantPlan(JSON.parse(await tf(["show", "-json", plan])));
       await tf(["apply", "-input=false", plan]);
     }
-    return z
-      .record(z.string(), z.string().min(1))
-      .parse(JSON.parse(await tf(["output", "-json", "bindings"])));
+    const issued = grants.parse(
+      JSON.parse(await tf(["output", "-json", "bindings"])),
+    );
+    for (const name of cloudflareGrantNames) {
+      if (supplied.has(name) && issued[name] !== supplied.get(name))
+        throw new BootstrapError(
+          "The issued Cloudflare token conflicts with " + name + ".",
+        );
+    }
+    return issued;
   } finally {
     // Plans and provider credentials never join a published configuration generation.
     await rm(dir, { force: true, recursive: true });

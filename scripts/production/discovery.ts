@@ -14,6 +14,7 @@ import {
   productionOrigins,
 } from "../../packages/frontends/index.ts";
 import {
+  cloudflareGrantNames,
   hostOptional,
   hostRequired,
   operatorRequired,
@@ -444,12 +445,7 @@ export async function bootstrapCidr() {
   return z.ipv4().parse(address) + "/32";
 }
 
-const cloudflareGrants = new Set([
-  "CF_READ_TOKEN",
-  "CF_WRITE_TOKEN",
-  "CLOUDFLARE_PROVISION_TOKEN",
-  "FV_PAGES_API_TOKEN",
-]);
+const cloudflareGrants = new Set<string>(cloudflareGrantNames);
 const invalidCredential = /[\r\n\0]/;
 
 export async function credentialPreflight(read = credential) {
@@ -514,12 +510,8 @@ export async function loadInputs(issued: Record<string, string> = {}) {
   if (missing.length)
     throw new BootstrapError("Missing machine bindings: " + missing.join(", "));
   if (
-    new Set([
-      values.CF_READ_TOKEN,
-      values.CF_WRITE_TOKEN,
-      values.CLOUDFLARE_PROVISION_TOKEN,
-      values.FV_PAGES_API_TOKEN,
-    ]).size !== 4
+    new Set(cloudflareGrantNames.map((name) => values[name])).size !==
+    cloudflareGrantNames.length
   )
     throw new BootstrapError(
       "Cloudflare DNS, Pages and provisioning credentials require separate scopes.",

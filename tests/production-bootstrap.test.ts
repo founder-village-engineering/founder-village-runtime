@@ -26,6 +26,7 @@ import {
   type CfRequest,
 } from "../scripts/production/discovery.ts";
 import {
+  acquireWorkstationLock,
   credential,
   exists,
   identities,
@@ -34,6 +35,19 @@ import {
   run,
   useVaultwardenBindings,
 } from "../scripts/production/workstation.ts";
+
+test("concurrent workstation enrollments can retry once the current writer finishes", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "fv-enrollment-lock-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const acquire = () => acquireWorkstationLock(join(dir, "vault.lock"), "busy");
+  const first = await acquire();
+  try {
+    await assert.rejects(acquire(), /busy/);
+  } finally {
+    first.close();
+  }
+  (await acquire()).close();
+});
 
 test("credential preflight reports absent, unreadable and delegated grants by name", async () => {
   const fixtureSecret = randomUUID();

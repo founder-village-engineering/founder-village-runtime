@@ -22,6 +22,7 @@ import {
   storageBinding,
 } from "./production/discovery.ts";
 import {
+  acquireWorkstationLock,
   BootstrapError,
   credential,
   digest,
@@ -81,14 +82,6 @@ export async function prepare(
     () => providerBinding(rootDir, work, home, template.project, bearer),
   );
   const issuer = await credential("FV_CF_TOKEN_ISSUER");
-  if (
-    issuer &&
-    apply &&
-    (await run("git", ["status", "--porcelain", "--untracked-files=normal"]))
-  )
-    throw new BootstrapError(
-      "Grant issuance requires a clean runtime checkout.",
-    );
   const issued = issuer
     ? await stage(
         "Delegated Founder Village Cloudflare grant issuance failed.",
@@ -301,17 +294,11 @@ async function main() {
     );
   process.umask(0o077);
   const home = await workstationDirectory(root);
-  const lock = join(home, "bootstrap.lock");
-  if (!(await exists(lock))) await publish(lock, "");
-  await privateText(lock);
-  // The OS releases SQLite's advisory write lock if the workstation process dies.
-  const { DatabaseSync } = await import("node:sqlite");
-  const db = new DatabaseSync(lock);
+  const db = await acquireWorkstationLock(
+    join(home, "bootstrap.lock"),
+    "Another production bootstrap holds the workstation lock.",
+  );
   try {
-    await stage(
-      "Another production bootstrap holds the workstation lock.",
-      async () => db.exec("BEGIN IMMEDIATE"),
-    );
     const keys = await stage("Workstation identity enrollment failed.", () =>
       identities(home),
     );
