@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use fv_config::{Config, digest, private_write};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fs, path::Path, time::Duration};
+use std::{fs, path::Path, time::Duration};
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Release {
@@ -23,15 +23,88 @@ pub fn promote_installed(root: &Path, c: &Config, revision: &str) -> Result<()> 
         "converge the host before promoting the installed release"
     );
     fv_host::assert_owned_host(c)?;
-    let manifest: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join(".state/source-manifest.json"))?)?;
-    ensure!(
-        manifest["version"] == 2 && manifest["revision"] == revision,
-        "installed signed release does not match the requested revision"
+    let manifest = super::workstation::Manifest::retained(root, revision, c.provider.architecture)?;
+    let generation = root.join(".fv-releases").join(revision);
+    manifest.verify_source(&generation)?;
+    manifest.load_images(root)?;
+    let current = super::workstation::Manifest::installed(root, c.provider.architecture)?.revision;
+    let cfg = root
+        .join(".state/private-config")
+        .join(format!("{}.private.json", c.environment));
+    let pending = root.join(format!(
+        ".state/{}/pending-config/{revision}.json",
+        c.environment
+    ));
+    let candidate_path = promotion_config(
+        &cfg,
+        &pending,
+        &generation,
+        &c.environment,
+        &current,
+        revision,
     );
-    let image = manifest["image"].as_str().context("missing signed image")?;
-    let id = prepare(root, c, revision, image)?;
-    deploy(root, c, &id)
+    let candidate = fv_config::load(&candidate_path)?;
+    ensure!(
+        candidate.environment == c.environment
+            && candidate.project == c.project
+            && candidate.provider.architecture == c.provider.architecture,
+        "candidate configuration crosses target boundary"
+    );
+    let previous_cfg = fs::read(&cfg)?;
+    // Before changing any existing runtime selection, verify the running data
+    // has its independently validated immutable backup.
+    super::backup::verify(root, c)?;
+    let attempt = (|| -> Result<()> {
+        switch_host(root, &cfg, Some(revision), &fs::read(candidate_path)?)?;
+        let id = prepare(root, &candidate, revision, &manifest.image)?;
+        deploy(root, &candidate, &id)
+    })();
+    if let Err(e) = attempt {
+        switch_host(root, &cfg, Some(&current), &previous_cfg)?;
+        super::render::render(root, c)?;
+        return Err(e);
+    }
+    if pending.exists() {
+        fs::remove_file(pending)?;
+    }
+    Ok(())
+}
+
+fn promotion_config(
+    live: &Path,
+    pending: &Path,
+    generation: &Path,
+    environment: &str,
+    current: &str,
+    requested: &str,
+) -> std::path::PathBuf {
+    // Explicitly staged changes take precedence. First launch must preserve
+    // Access IDs reconciled after installation and before enabling ingress.
+    if pending.is_file() {
+        pending.into()
+    } else if current == requested {
+        live.into()
+    } else {
+        generation
+            .join(".bundle")
+            .join(format!("{environment}.config"))
+    }
+}
+fn switch_host(
+    root: &Path,
+    config: &Path,
+    revision: Option<&str>,
+    new_config: &[u8],
+) -> Result<()> {
+    let prior = fs::read(config)?;
+    private_write(config, new_config)?;
+    if let Some(rev) = revision
+        && let Err(e) = super::workstation::select_generation(root, rev)
+    {
+        private_write(config, &prior)?;
+        return Err(e);
+    }
+    Ok(())
 }
 
 pub fn prepare(root: &Path, c: &Config, revision: &str, image: &str) -> Result<String> {
@@ -39,71 +112,20 @@ pub fn prepare(root: &Path, c: &Config, revision: &str, image: &str) -> Result<S
         revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit()),
         "exact git SHA required"
     );
-    immutable_repository(image)?;
-    if c.environment != "local" {
-        if root.join(".git").exists() {
-            let head = std::process::Command::new("git")
-                .args(["rev-parse", "HEAD"])
-                .current_dir(root)
-                .output()?;
-            ensure!(
-                head.status.success() && String::from_utf8(head.stdout)?.trim() == revision,
-                "runtime checkout must match exact release revision"
-            );
-            let clean = std::process::Command::new("git")
-                .args(["status", "--porcelain"])
-                .current_dir(root)
-                .output()?;
-            ensure!(
-                clean.status.success() && clean.stdout.is_empty(),
-                "remote release requires a clean checkout"
-            );
-        } else {
-            let manifest: serde_json::Value =
-                serde_json::from_slice(&fs::read(root.join(".state/source-manifest.json"))?)?;
-            ensure!(
-                manifest["revision"] == revision,
-                "installed signed source revision mismatch"
-            );
-            if manifest["version"] == 2 {
-                ensure!(
-                    manifest["image"] == image,
-                    "image is outside the installed signed release"
-                );
-                ensure!(
-                    manifest["binaries"][c.provider.architecture.oci()]
-                        == digest(&fs::read(root.join("target/release/fv"))?),
-                    "installed native CLI does not match the signed release"
-                );
-            } else {
-                ensure!(
-                    manifest["version"] == 1
-                        && c.provider.architecture == fv_config::Architecture::Amd64,
-                    "installed source manifest does not support this platform"
-                );
-            }
-            for entry in manifest["files"]
-                .as_array()
-                .context("missing signed source inventory")?
-            {
-                let relative = Path::new(entry["path"].as_str().context("invalid source path")?);
-                ensure!(
-                    relative
-                        .components()
-                        .all(|p| matches!(p, std::path::Component::Normal(_))),
-                    "unsafe source path"
-                );
-                let file = root.join(relative);
-                ensure!(
-                    !file.symlink_metadata()?.file_type().is_symlink()
-                        && digest(&fs::read(file)?)
-                            == entry["sha256"].as_str().context("missing source hash")?,
-                    "installed source drift"
-                );
-            }
-        }
-    }
-    let migrations = tree_hash(root, &["database"])?;
+    let source = if c.environment == "local" {
+        immutable_repository(image)?;
+        root.to_path_buf()
+    } else {
+        let manifest = super::workstation::Manifest::installed(root, c.provider.architecture)?;
+        ensure!(
+            manifest.revision == revision && manifest.image == image,
+            "release differs from the signed installation"
+        );
+        let generation = root.join(".fv-current");
+        manifest.verify_source(&generation)?;
+        generation
+    };
+    let migrations = tree_hash(&source, &["database"])?;
     let r = Release {
         revision: revision.into(),
         image: image.into(),
@@ -143,55 +165,16 @@ pub fn deploy(root: &Path, c: &Config, id: &str) -> Result<()> {
         c.environment == "local" || arch == c.provider.architecture,
         "Docker architecture does not match this host manifest"
     );
-    let policy: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join("policies/release.json"))?)?;
-    approved_image(
-        &release.image,
-        policy["registryPrefix"]
-            .as_str()
-            .context("missing registry policy")?,
-    )?;
-    fv_host::run(
-        "cosign",
-        &[
-            "verify",
-            "--certificate-identity-regexp",
-            policy["identityPattern"]
-                .as_str()
-                .context("missing signer identity")?,
-            "--certificate-oidc-issuer",
-            policy["issuer"].as_str().context("missing signer issuer")?,
-            &release.image,
-        ],
-        root,
-        &BTreeMap::new(),
-        120,
-    )?;
-    fv_host::run(
-        "docker",
-        &[
-            "pull",
-            "--platform",
-            &format!("linux/{}", arch.oci()),
-            &release.image,
-        ],
-        root,
-        &BTreeMap::new(),
-        300,
-    )?;
-    let labels = std::process::Command::new("docker")
-        .args([
-            "image", "inspect", "--format",
-            "{{.Os}}/{{.Architecture}} {{index .Config.Labels \"org.opencontainers.image.revision\"}}",
-            &release.image,
-        ])
-        .output()?;
     ensure!(
-        labels.status.success()
-            && std::str::from_utf8(&labels.stdout)?.trim()
-                == format!("linux/{} {}", arch.oci(), release.revision),
-        "image platform or source revision mismatch"
+        c.environment != "local",
+        "promote a signed installation on its bound host"
     );
+    let installed = super::workstation::Manifest::installed(root, c.provider.architecture)?;
+    ensure!(
+        installed.image == release.image && installed.revision == release.revision,
+        "candidate image mismatch"
+    );
+    installed.load_images(root)?;
     let state = root.join(format!(".state/{}", c.environment));
     let previous = fs::read_to_string(state.join("active-color"))?;
     let next = opposite_color(&previous)?;
@@ -204,7 +187,13 @@ pub fn deploy(root: &Path, c: &Config, id: &str) -> Result<()> {
             previous.trim().to_uppercase()
         )) == Some(&release.revision)
     {
-        return check_proxy(c, &release.revision);
+        check_proxy(c, &release.revision)?;
+        return verify_containers(
+            root,
+            c,
+            &format!("api-{}", previous.trim()),
+            &release.revision,
+        );
     }
     env.insert("FV_APP_IMAGE".into(), release.image.clone());
     env.insert(
@@ -216,8 +205,7 @@ pub fn deploy(root: &Path, c: &Config, id: &str) -> Result<()> {
         format!("FV_API_{}_REVISION", next.to_uppercase()),
         release.revision.clone(),
     );
-    env.entry("FV_ADMIN_IMAGE".into())
-        .or_insert_with(|| release.image.clone());
+    env.insert("FV_ADMIN_IMAGE".into(), release.image.clone());
     let file = root.join(format!(".state/{}.env", c.environment));
     let old_env = fs::read(&file)?;
     private_write(
@@ -247,11 +235,12 @@ pub fn deploy(root: &Path, c: &Config, id: &str) -> Result<()> {
             &env,
             120,
         )?;
-        start(root, c, &[&service, "admin", "caddy"])?;
+        start(root, c, &[&service])?;
         ready(
             if next == "blue" { 43811 } else { 43812 },
             &release.revision,
         )?;
+        start(root, c, &["admin", "caddy"])?;
         private_write(&state.join("active-color"), next.as_bytes())?;
         cutover = true;
         super::render::render(root, c)?;
@@ -260,12 +249,31 @@ pub fn deploy(root: &Path, c: &Config, id: &str) -> Result<()> {
         workers_replaced = true;
         super::compose(root, c, &["stop", "workers"])?;
         start(root, c, &["workers"])?;
+        verify_containers(root, c, &service, &release.revision)?;
+        let mut db = super::client(root, c)?;
+        let mut tx = db.transaction()?;
+        let written=tx.execute("INSERT INTO control.deployments(id,revision,manifest_hash,color,state) SELECT gen_random_uuid(),$1,$2,$3,'serving' WHERE NOT EXISTS (SELECT 1 FROM control.deployments WHERE manifest_hash=$2 AND color=$3 AND state='serving')",&[&release.revision,&id,&next])?;
+        if written > 0 {
+            tx.execute(
+                "SELECT control.append_audit($1,$2,$3,$4,NULL)",
+                &[
+                    &"operator-cli",
+                    &"deploy.release",
+                    &c.environment,
+                    &"succeeded",
+                ],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     })();
     if let Err(failure) = attempt {
         private_write(&state.join("active-color"), previous.trim().as_bytes())?;
         private_write(&file, &old_env)?;
         super::render::render(root, c)?;
+        if previous_exists {
+            start(root, c, &["admin"])?;
+        }
         if cutover && previous_exists {
             reload_proxy(root, c).context("failed to restore previous proxy route")?;
         }
@@ -277,13 +285,17 @@ pub fn deploy(root: &Path, c: &Config, id: &str) -> Result<()> {
         }
         return Err(failure);
     }
+    private_write(
+        &state.join(format!("config-{next}.json")),
+        &serde_json::to_vec(c)?,
+    )?;
     if previous_exists {
+        if let Ok(old_id) = fs::read(state.join("current-release")) {
+            private_write(&state.join("previous-release"), &old_id)?;
+        }
         private_write(&state.join("previous-color"), previous.trim().as_bytes())?;
     }
     private_write(&state.join("current-release"), id.as_bytes())?;
-    let mut db = super::client(root, c)?;
-    db.execute("INSERT INTO control.deployments(id,revision,manifest_hash,color,state) VALUES(gen_random_uuid(),$1,$2,$3,'serving')",&[&release.revision,&id,&next])?;
-    super::record(root, c, "deploy.release", "succeeded")?;
     Ok(())
 }
 
@@ -293,6 +305,8 @@ fn start(root: &Path, c: &Config, services: &[&str]) -> Result<()> {
         "-d",
         "--no-deps",
         "--no-build",
+        "--pull",
+        "never",
         "--wait",
         "--wait-timeout",
         "90",
@@ -353,26 +367,129 @@ fn active_release(root: &Path, c: &Config) -> Result<(String, String)> {
     let color = value.trim();
     opposite_color(color)?;
     let env = super::env(root, c)?;
-    let policy: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join("policies/release.json"))?)?;
-    let prefix = policy["registryPrefix"]
-        .as_str()
-        .context("missing registry policy")?;
+    let revision = env
+        .get(&format!("FV_API_{}_REVISION", color.to_uppercase()))
+        .context("missing promoted revision")?;
     for key in [
         format!("FV_API_{}_IMAGE", color.to_uppercase()),
         "FV_ADMIN_IMAGE".into(),
         "FV_APP_IMAGE".into(),
     ] {
-        approved_image(env.get(&key).context("missing promoted image")?, prefix)?;
+        let image = env.get(&key).context("missing promoted image")?;
+        verified_running(
+            root,
+            c,
+            image,
+            if key == "FV_ADMIN_IMAGE" {
+                None
+            } else {
+                Some(revision)
+            },
+        )?;
     }
-    let revision = env
-        .get(&format!("FV_API_{}_REVISION", color.to_uppercase()))
-        .context("missing promoted revision")?;
     ensure!(
         revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit()),
         "invalid promoted revision"
     );
     Ok((format!("api-{color}"), revision.clone()))
+}
+
+// A pre-v3 deployment may be the first rollback target during an in-place
+// upgrade. Admit only a digest recorded in its original content-addressed
+// deployment receipt and already present locally. Never fetch a legacy image.
+fn verified_running(
+    root: &Path,
+    c: &Config,
+    image: &str,
+    revision: Option<&str>,
+) -> Result<Option<String>> {
+    if let Some(rev) = image.strip_prefix("fv-runtime:local-") {
+        ensure!(
+            revision.is_none_or(|r| r == rev),
+            "running revision differs from signed image"
+        );
+        let m = super::workstation::Manifest::retained(root, rev, c.provider.architecture)?;
+        ensure!(m.image == image, "unexpected signed image");
+        m.load_images(root)?;
+        return Ok(Some(rev.into()));
+    }
+    approved_image(
+        image,
+        "ghcr.io/founder-village-engineering/founder-village-runtime@sha256:",
+    )?;
+    let mut known = false;
+    for file in fs::read_dir(root.join(".state/releases"))? {
+        let file = file?;
+        if !file.file_type()?.is_file() {
+            continue;
+        }
+        let bytes = fs::read(file.path())?;
+        if file.path().file_stem().and_then(|x| x.to_str()) != Some(&digest(&bytes)) {
+            continue;
+        }
+        let release: Release = serde_json::from_slice(&bytes)?;
+        if release.image == image && revision.is_none_or(|r| r == release.revision) {
+            let mut db = super::client(root, c)?;
+            if db.query_opt("SELECT 1 FROM control.deployments WHERE manifest_hash=$1 AND revision=$2 AND state='serving' LIMIT 1", &[&digest(&bytes),&release.revision])?.is_some() {known=true;break;}
+        }
+    }
+    ensure!(known, "legacy image lacks original deployment evidence");
+    let output = fv_host::host_docker()
+        .args([
+            "image",
+            "inspect",
+            "--format",
+            "{{.Os}}/{{.Architecture}}",
+            image,
+        ])
+        .output()?;
+    ensure!(
+        output.status.success()
+            && std::str::from_utf8(&output.stdout)?.trim()
+                == format!("linux/{}", c.provider.architecture.oci()),
+        "legacy rollback image is unavailable locally"
+    );
+    Ok(None)
+}
+
+fn verify_containers(root: &Path, c: &Config, api: &str, revision: &str) -> Result<()> {
+    let env = super::env(root, c)?;
+    for (service, key) in [
+        (
+            api,
+            format!("FV_{}_IMAGE", api.replace('-', "_").to_uppercase()),
+        ),
+        ("admin", "FV_ADMIN_IMAGE".into()),
+        ("workers", "FV_APP_IMAGE".into()),
+    ] {
+        let tag = env.get(&key).context("missing serving image binding")?;
+        let Some(rev) = tag.strip_prefix("fv-runtime:local-") else {
+            continue;
+        };
+        ensure!(rev == revision, "serving containers use different releases");
+        let m = super::workstation::Manifest::retained(root, rev, c.provider.architecture)?;
+        let image = &m.images["app"];
+        let out = fv_host::host_docker()
+            .args([
+                "container",
+                "inspect",
+                "--format",
+                "{{.State.Running}} {{.Image}} {{.Config.Image}}",
+                &format!("{}-{service}-1", c.project),
+            ])
+            .output()?;
+        let stdout = std::str::from_utf8(&out.stdout)?;
+        let fields: Vec<_> = stdout.split_whitespace().collect();
+        ensure!(
+            out.status.success()
+                && fields.len() == 3
+                && fields[0] == "true"
+                && (fields[1] == image.id || fields[1] == image.manifest_id)
+                && fields[2] == image.tag,
+            "serving container differs from signed release"
+        );
+    }
+    Ok(())
 }
 
 pub fn resume(root: &Path, c: &Config) -> Result<()> {
@@ -383,13 +500,15 @@ pub fn resume(root: &Path, c: &Config) -> Result<()> {
         let (service, revision) = active_release(root, c)?;
         start(root, c, &[&service, "admin", "caddy", "workers"])?;
         check_proxy(c, &revision)?;
+        verify_containers(root, c, &service, &revision)?;
     }
     Ok(())
 }
 
 pub fn check_serving(root: &Path, c: &Config) -> Result<String> {
-    let (_, revision) = active_release(root, c)?;
+    let (service, revision) = active_release(root, c)?;
     check_proxy(c, &revision)?;
+    verify_containers(root, c, &service, &revision)?;
     Ok(revision)
 }
 fn ready(port: u16, revision: &str) -> Result<()> {
@@ -440,14 +559,29 @@ pub fn rollback(root: &Path, c: &Config) -> Result<()> {
         .get(&format!("FV_API_{}_IMAGE", previous.trim().to_uppercase()))
         .context("no previous immutable artifact")?
         .clone();
-    let policy: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join("policies/release.json"))?)?;
-    approved_image(
-        &image,
-        policy["registryPrefix"]
-            .as_str()
-            .context("missing registry policy")?,
-    )?;
+    let generation = verified_running(root, c, &image, Some(&revision))?;
+    if let Some(rev) = &generation {
+        let manifest = super::workstation::Manifest::retained(root, rev, c.provider.architecture)?;
+        manifest.verify_archive(&root.join(".fv-releases").join(rev))?;
+        manifest.verify_source(&root.join(".fv-releases").join(rev))?;
+    }
+    let original = super::workstation::Manifest::installed(root, c.provider.architecture)?.revision;
+    let active_config = root
+        .join(".state/private-config")
+        .join(format!("{}.private.json", c.environment));
+    let old_config = fs::read(&active_config)?;
+    let prior_config = state.join(format!("config-{}.json", previous.trim()));
+    let target_config = if prior_config.exists() {
+        fv_config::load(&prior_config)?
+    } else {
+        c.clone()
+    };
+    ensure!(
+        target_config.project == c.project
+            && target_config.environment == c.environment
+            && target_config.provider.architecture == c.provider.architecture,
+        "rollback configuration crosses target boundary"
+    );
     let service = format!("api-{}", previous.trim());
     start(root, c, &[&service])?;
     ready(
@@ -458,6 +592,7 @@ pub fn rollback(root: &Path, c: &Config) -> Result<()> {
         },
         &revision,
     )?;
+    env.insert("FV_ADMIN_IMAGE".into(), image.clone());
     env.insert("FV_APP_IMAGE".into(), image);
     env.insert("FV_REVISION".into(), revision.clone());
     let file = root.join(format!(".state/{}.env", c.environment));
@@ -471,20 +606,37 @@ pub fn rollback(root: &Path, c: &Config) -> Result<()> {
     )?;
 
     let attempt = (|| -> Result<()> {
+        switch_host(
+            root,
+            &active_config,
+            generation.as_deref(),
+            &serde_json::to_vec(&target_config)?,
+        )?;
         private_write(&state.join("active-color"), previous.trim().as_bytes())?;
-        super::render::render(root, c)?;
+        super::render::render(root, &target_config)?;
+        start(root, c, &["admin", "caddy"])?;
         reload_proxy(root, c)?;
-        check_proxy(c, &revision)?;
+        check_proxy(&target_config, &revision)?;
         super::compose(root, c, &["stop", "workers"])?;
-        start(root, c, &["workers"])
+        start(root, c, &["workers"])?;
+        verify_containers(root, &target_config, &service, &revision)
     })();
     if let Err(failure) = attempt {
+        switch_host(root, &active_config, Some(&original), &old_config)?;
         private_write(&state.join("active-color"), current.trim().as_bytes())?;
         private_write(&file, &old_env)?;
         super::render::render(root, c)?;
+        start(root, c, &["admin", "caddy"])?;
         reload_proxy(root, c).context("failed to restore current proxy route")?;
         start(root, c, &["workers"]).context("failed to restore current workers")?;
         return Err(failure);
+    }
+    if let (Ok(active_id), Ok(prior_id)) = (
+        fs::read(state.join("current-release")),
+        fs::read(state.join("previous-release")),
+    ) {
+        private_write(&state.join("current-release"), &prior_id)?;
+        private_write(&state.join("previous-release"), &active_id)?;
     }
     private_write(&state.join("previous-color"), current.trim().as_bytes())?;
     super::record(root, c, "deploy.rollback", "succeeded")?;
@@ -492,19 +644,21 @@ pub fn rollback(root: &Path, c: &Config) -> Result<()> {
 }
 
 fn config_hash(root: &Path, c: &Config) -> Result<String> {
+    let source = if root.join(".fv-current").is_symlink() {
+        root.join(".fv-current")
+    } else {
+        root.to_path_buf()
+    };
+    let mut paths = vec![
+        "hasura",
+        "config/applications.json",
+        "config/tools.lock.json",
+    ];
+    if source.join("policies").exists() {
+        paths.push("policies");
+    }
     let mut b = serde_json::to_vec(c)?;
-    b.extend(
-        tree_hash(
-            root,
-            &[
-                "hasura",
-                "policies",
-                "config/applications.json",
-                "config/tools.lock.json",
-            ],
-        )?
-        .as_bytes(),
-    );
+    b.extend(tree_hash(&source, &paths)?.as_bytes());
     Ok(digest(&b))
 }
 fn tree_hash(root: &Path, paths: &[&str]) -> Result<String> {
@@ -577,6 +731,48 @@ fn approved_image(image: &str, prefix: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn first_launch_and_staged_config_follow_the_operational_source_and_rollback_together() {
+        let root = std::env::temp_dir().join(format!(
+            "fv-config-generation-{}",
+            fv_config::random_secret()
+        ));
+        let first = "a".repeat(40);
+        let second = "b".repeat(40);
+        let first_dir = root.join(".fv-releases").join(&first);
+        let second_dir = root.join(".fv-releases").join(&second);
+        fs::create_dir_all(first_dir.join(".bundle")).unwrap();
+        fs::create_dir_all(second_dir.join(".bundle")).unwrap();
+        let live = root.join("active-config");
+        let pending = root.join("pending-config");
+        fs::write(
+            first_dir.join(".bundle/production.config"),
+            b"awaiting Access",
+        )
+        .unwrap();
+        private_write(&live, b"reconciled Access").unwrap();
+        let chosen = promotion_config(&live, &pending, &first_dir, "production", &first, &first);
+        assert_eq!(fs::read(chosen).unwrap(), b"reconciled Access");
+        crate::workstation::select_generation(&root, &first).unwrap();
+        private_write(&pending, b"authorized update").unwrap();
+        let chosen = promotion_config(&live, &pending, &second_dir, "production", &first, &second);
+        switch_host(&root, &live, Some(&second), &fs::read(chosen).unwrap()).unwrap();
+        assert_eq!(fs::read(&live).unwrap(), b"authorized update");
+        assert_eq!(
+            root.join(".fv-current").canonicalize().unwrap(),
+            second_dir.canonicalize().unwrap()
+        );
+        assert!(switch_host(&root, &live, Some(&"d".repeat(40)), b"missing restore").is_err());
+        assert_eq!(fs::read(&live).unwrap(), b"authorized update");
+        switch_host(&root, &live, Some(&first), b"reconciled Access").unwrap();
+        assert_eq!(
+            root.join(".fv-current").canonicalize().unwrap(),
+            first_dir.canonicalize().unwrap()
+        );
+        assert_eq!(fs::read(&live).unwrap(), b"reconciled Access");
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn immutable_images_require_exact_repository_and_digest() {
         let hash = "a".repeat(64);

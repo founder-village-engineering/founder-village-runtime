@@ -6,30 +6,49 @@
 > Use placeholders and approved secret stores, inspect staged changes before every commit, and
 > immediately rotate anything that may have been exposed.
 
-A protected `vMAJOR.MINOR.PATCH` tag on a commit reachable from `main` builds on native GitHub-hosted AMD64 and ARM64 runners. Each runner builds the Linux Rust CLI, checks the application containers against the local data stack, and scans its native image. The final job signs the exact multi-platform registry index and the source and CLI artifacts. The signed manifest binds the image index, both CLI hashes, and the exact source inventory to one revision. Tags and the `main` branch require repository-level protection. Configure the GHCR package for anonymous pulls of the public release. [GitHub-hosted runner platforms](https://docs.github.com/en/actions/reference/runners/github-hosted-runners), [Docker multi-platform images](https://docs.docker.com/build/building/multi-platform/)
+## Build and sign on the workstation
 
-Promote from an authenticated operator SSH session through Cloudflare Access using the root-owned CLI. Older manifests can use their existing WireGuard route. Keep privileged self-hosted runners disconnected from the public repository. Prepare each environment independently and promote the same signed image digest for staging and production. [GitHub runner security guidance](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/manage-access)
+One release targets one Linux architecture. The Helsinki CX23 uses `amd64`. The builder requires a local Docker Engine, the locked checkout, Git, Gitleaks and OpenSSH. It compiles the Rust CLI, native Node runtime and dependencies, and TypeScript services locally. It exports the six pinned runtime images and scans the application image. The signed manifest binds the exact architecture, image identities, application SBOM, checkout, CLI and host files. The install transfers an offline bundle over pinned SSH. [Docker multi-platform builds](https://docs.docker.com/build/building/multi-platform/)
 
-For a new host, follow [provisioning](PROVISIONING.md). For an application update, set `host` in the private bootstrap settings to the configured SSH hostname and omit `initialRootPublicKey`. Keep the console-pinned host key and private identity in the workstation settings. The bootstrap tool uses `cloudflared` for the connection. Schedule host or migration changes with an operator session and keep the prior release artifacts. Prepare the exact signed revision and image digest on the VM, then use the fingerprint printed by prepare.
+Keep a dedicated release-signing key on the workstation or in its SSH agent. Verify the public key fingerprint through an independent trusted channel. Keep a single trusted public line in a separate operator-controlled file outside both the checkout and the release directory, using this form with the actual Ed25519 public key. [OpenSSH allowed signers](https://man.openbsd.org/ssh-keygen#ALLOWED_SIGNERS)
+
+```text
+founder-village-release namespaces="fv-release-v3" ssh-ed25519 <base64-public-key>
+```
+
+Use a new output path in an operator-owned private directory and an audited clean checkout. A passphrase-protected private key can stay in the SSH agent while the build references its public file. An explicit local test build from a dirty checkout uses `--allow-dirty` and records a separate content-derived revision.
+
+```sh
+npm ci
+npm run release:local -- --arch amd64 --out "$release_dir" \
+  --signing-key "$signing_key" --allowed-signers "$allowed_signers"
+```
+
+The full build-source archive stays with the workstation evidence. Populate `releaseDirectory` and `allowedSigners` in the private bootstrap settings. The VM independently checks the signer, artifact hashes, architecture and image identities. Its root-owned trust file is `/etc/fv/release.allowed_signers`. A replacement signer requires a separately authorized change to the host trust file. Protect the operator SSH key separately from the signing key. [Provisioning](PROVISIONING.md)
+
+## Stage and promote
+
+From the Mac run the bootstrap against the console-pinned address for first install or the verified Access SSH hostname for updates.
+
+```sh
+node --import tsx scripts/remote-bootstrap.ts config/bootstrap.private.json
+runtime_revision=$(jq -er .revision "$release_dir/source-manifest.json")
+```
+
+Use that revision in an authenticated SSH session on the host. A subsequent install stages the generation alongside the active release. The runtime starts from the locally loaded image IDs. Promotion verifies backup and immutable-copy readiness, runs additive migrations, exercises the inactive API and admin routes, and switches the proxy only after the expected revision passes.
 
 ```sh
 cd /opt/founder-village
-manifest=config/staging.private.json
-revision=$(sudo jq -er .revision .state/source-manifest.json)
-image=$(sudo jq -er .image .state/source-manifest.json)
-prepared=$(sudo bin/fv --config "$manifest" release prepare --revision "$revision" --image "$image")
-sudo bin/fv --config "$manifest" release deploy --id "$prepared"
+manifest=config/production.private.json
+sudo bin/fv --config "$manifest" release promote --revision "$runtime_revision"
 sudo bin/fv --config "$manifest" doctor
 ```
 
-Promotion binds the installed source and image, checks the registry signer, verifies the recent backup receipt and its immutable-copy completion, and checks the selected image's Linux architecture and source revision. It applies additive migrations and verifies the inactive API color before switching Caddy. The proxy must serve the expected revision and both API and admin readiness routes before the new workers are accepted. The admin image has its own pin.
-
-On a host installed from a signed bundle, `sudo bin/fv --config "$manifest" release promote --revision "$revision"` prepares and deploys the installed v2 bundle under one lock. Use the exact revision from the release workflow you intend to promote. See [Founder Village production](PRODUCTION.md) for the runtime domains, Pages release and public verification.
-
-Once the tunnel is enabled, run the public check from an independent operator device using the production API origin and the signed revision. The scheduled uptime workflow uses the repository's public `FV_PUBLIC_API_URL` variable.
+Once ingress is enabled, verify readiness, TLS expiry and serving revision from the workstation. The local uptime LaunchAgent can repeat the readiness and TLS check every ten minutes while the operator session is running.
 
 ```sh
-PUBLIC_API_URL=https://api.example.com PUBLIC_API_REVISION="$revision" node scripts/probe.ts
+PUBLIC_API_URL=https://api.example.com PUBLIC_API_REVISION="$runtime_revision" node scripts/probe.ts
+PUBLIC_API_URL=https://api.example.com npm run uptime:install
 ```
 
 Browser-originated production operations require fresh MFA with a nonce bound to the operation. The runner independently verifies authorization and consumes it once. Expired, failed, or uncertain operations require reconciliation and a fresh authorization.
@@ -43,4 +62,4 @@ sudo bin/fv --config "$manifest" doctor
 
 The first launch has no previous color to roll back to. Stop public routing with `sudo systemctl stop fv-ingress.service` if a serving fault requires containment. Use the Hetzner console for stopping or restarting ingress because the same connector carries operator SSH. The runtime service restores promoted services from pinned image references on reboot. The ingress service is enabled separately and checks private readiness before starting Cloudflare Tunnel.
 
-`npm run release:verify` runs the expanded local checks with source fingerprints. Hosted publication, cloud provisioning, public ingress, authenticated behavior, offsite-copy verification, and clean-host recovery each require their own evidence.
+`npm run release:verify` runs the expanded local checks with source fingerprints. Public Pages publication, cloud provisioning, public ingress, authenticated behavior, offsite-copy verification, and clean-host recovery each require their own evidence.

@@ -17,6 +17,14 @@ const origin = z
     );
   }, "origin must contain only scheme, host, and optional port");
 
+const pagesProject = z.string().regex(/^[a-z][a-z0-9-]{0,62}$/);
+
+export const pagesProjectFields = {
+  pagesProject,
+  productionOrigin: origin,
+  additionalPagesProjects: z.array(pagesProject).min(1).optional(),
+};
+
 const customOriginSchema = origin.refine(
   (value) =>
     /^https:\/\/[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?\.foundervillage\.xyz$/.test(
@@ -68,8 +76,7 @@ export const frontendSchema = z
   .object({
     id: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
     application: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
-    pagesProject: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
-    productionOrigin: origin,
+    ...pagesProjectFields,
     ...customOriginFields,
     localOrigins: z.array(origin).min(1),
     frontendPath: z.string().regex(/^apps\/[a-z][a-z0-9-]{0,62}$/),
@@ -79,7 +86,11 @@ export const frontendSchema = z
     featureFrontends: featureFrontendsSchema.optional(),
   })
   .strict()
-  .refine(usesOneAliasFormat, "use customOrigin or customOrigins");
+  .refine(usesOneAliasFormat, "use customOrigin or customOrigins")
+  .refine(({ pagesProject, additionalPagesProjects = [] }) => {
+    const projects = [pagesProject, ...additionalPagesProjects];
+    return new Set(projects).size === projects.length;
+  }, "duplicate Pages project");
 
 export type FrontendApplication = z.infer<typeof frontendSchema>;
 
@@ -95,11 +106,17 @@ const applicationsById = new Set(applications.map((entry) => entry.id));
 export function productionOrigins(
   frontend: Pick<
     FrontendApplication,
-    "productionOrigin" | "customOrigin" | "customOrigins"
+    | "productionOrigin"
+    | "additionalPagesProjects"
+    | "customOrigin"
+    | "customOrigins"
   >,
 ) {
   return [
     frontend.productionOrigin,
+    ...(frontend.additionalPagesProjects ?? []).map(
+      (project) => `https://${project}.pages.dev`,
+    ),
     ...(frontend.customOrigins ??
       (frontend.customOrigin ? [frontend.customOrigin] : [])),
   ];
@@ -136,15 +153,19 @@ export function featureFrontends(frontend: FrontendApplication) {
 }
 
 for (const frontend of frontends) {
+  const frontendProjects = [
+    frontend.pagesProject,
+    ...(frontend.additionalPagesProjects ?? []),
+  ];
   if (
     ids.has(frontend.id) ||
-    projects.has(frontend.pagesProject) ||
+    frontendProjects.some((project) => projects.has(project)) ||
     paths.has(frontend.frontendPath) ||
     contractSources.has(frontend.contractSource)
   )
     throw new Error("duplicate frontend registration");
   ids.add(frontend.id);
-  projects.add(frontend.pagesProject);
+  for (const project of frontendProjects) projects.add(project);
   paths.add(frontend.frontendPath);
   contractSources.add(frontend.contractSource);
   if (!applicationsById.has(frontend.application))

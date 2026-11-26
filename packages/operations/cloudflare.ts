@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import { mkdir } from "node:fs/promises";
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { dnsRecord } from "../contracts/index.ts";
@@ -45,7 +45,7 @@ export function normalize(r: Existing | DnsRecord | null) {
 }
 export async function runCloudflareCli(
   args: string[],
-  token: string,
+  auth: { token: string } | { profile: "foundervillage" },
 ): Promise<unknown> {
   const binary = secret("CF_BINARY"),
     expected = secret("CF_SHA256");
@@ -57,17 +57,31 @@ export async function runCloudflareCli(
       .digest("hex") !== expected
   )
     throw new Error("cf checksum mismatch");
-  const workdir = secret("CF_WORK_DIR");
-  await mkdir(workdir, { recursive: true, mode: 0o700 });
+  const profile = "profile" in auth ? auth.profile : undefined;
+  const workdir = profile
+    ? await mkdtemp(path.join(tmpdir(), "fv-cf-profile-"))
+    : secret("CF_WORK_DIR");
   try {
-    const { stdout } = await exec(process.execPath, [binary, ...args], {
+    await mkdir(workdir, { recursive: true, mode: 0o700 });
+    const cliArgs = profile ? [...args, "--profile", profile] : args;
+    const { stdout } = await exec(process.execPath, [binary, ...cliArgs], {
       cwd: workdir,
       timeout: 30000,
       maxBuffer: 2 * 1024 * 1024,
       env: {
         PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
-        CLOUDFLARE_API_TOKEN: token,
+        ...(profile
+          ? {
+              HOME: process.env.HOME,
+              XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+              XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
+              CLOUDFLARE_AUTH_USE_KEYRING:
+                process.env.CLOUDFLARE_AUTH_USE_KEYRING,
+            }
+          : {}),
+        CLOUDFLARE_API_TOKEN: "token" in auth ? auth.token : undefined,
         CLOUDFLARE_ACCOUNT_ID: secret("CF_ACCOUNT_ID"),
+        CLOUDFLARE_API_BASE_URL: "https://api.cloudflare.com/client/v4",
         CI: "true",
       },
       encoding: "utf8",
@@ -75,16 +89,37 @@ export async function runCloudflareCli(
     return JSON.parse(stdout);
   } catch {
     throw new Error("cloudflare_operation_failed");
+  } finally {
+    if (profile) await rm(workdir, { recursive: true, force: true });
   }
 }
 
 export class Cloudflare {
-  constructor(private readonly write = false) {}
+  constructor(
+    private readonly write = false,
+    private readonly profile?: "foundervillage",
+  ) {}
   async call(args: string[]): Promise<unknown> {
     return runCloudflareCli(
       args,
-      secret(this.write ? "CF_WRITE_TOKEN" : "CF_READ_TOKEN"),
+      this.profile
+        ? { profile: this.profile }
+        : { token: secret(this.write ? "CF_WRITE_TOKEN" : "CF_READ_TOKEN") },
     );
+  }
+  async verifyZoneOwnership(): Promise<void> {
+    const id = secret("CF_ZONE_ID");
+    const zone = await this.call(["zones", "get", "--zone", id]);
+    const expected = z.object({
+      id: z.literal(id),
+      name: z.literal(secret("CF_ZONE_NAME")),
+      status: z.literal("active"),
+      account: z.object({ id: z.literal(secret("CF_ACCOUNT_ID")) }),
+    });
+    if (!expected.safeParse(zone).success)
+      throw new Error(
+        "active Cloudflare zone does not match the configured account and zone",
+      );
   }
   allowed(name: string) {
     const allowed = secret("CF_MANAGED_NAMES").split(",");

@@ -39,6 +39,16 @@ const token = await localToken("alice"),
   bob = await localToken("bob");
 const headers = { authorization: `Bearer ${token}`, "x-tenant-id": tid };
 try {
+  const engineHealth = await fetch(
+    new URL("/healthz?strict=true", process.env.HASURA_URL),
+    { signal: AbortSignal.timeout(5000) },
+  );
+  assert.equal(
+    engineHealth.status,
+    200,
+    "Hasura must be serving consistent metadata after startup",
+  );
+  proof.push("Hasura v2 serves its strict health endpoint");
   await migrate(migration, "app");
   await migrate(cm, "control");
   proof.push("migrations repeat without drift");

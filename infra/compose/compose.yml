@@ -29,7 +29,7 @@ services:
       context: .
       dockerfile: infra/images/postgres.Dockerfile
       args: {POSTGRES_IMAGE: '${POSTGRES_IMAGE}'}
-    image: fv-postgres:${FV_ENV}
+    image: ${FV_POSTGRES_IMAGE:-fv-postgres:${FV_ENV}}
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -67,10 +67,16 @@ services:
       HASURA_GRAPHQL_ENABLE_TELEMETRY: 'false'
     depends_on: {postgres: {condition: service_healthy}}
     ports: ['127.0.0.1:43803:8080']
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --show-error, --max-time, '2', http://127.0.0.1:8080/healthz]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
     networks: [data, hasura-access]
     mem_limit: 512m
   rabbitmq:
-    image: fv-rabbitmq:${FV_ENV}
+    image: ${FV_RABBITMQ_IMAGE:-fv-rabbitmq:${FV_ENV}}
     build:
       context: .
       dockerfile: infra/images/rabbitmq.Dockerfile

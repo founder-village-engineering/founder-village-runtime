@@ -2,4 +2,5 @@
 set -eu
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 if [ -x "$ROOT/target/release/fv" ]; then exec "$ROOT/target/release/fv" --root "$ROOT" "$@"; fi
+if [ -d "$ROOT/.fv-releases" ] || [ ! -f "$ROOT/Cargo.toml" ]; then echo "Signed native host runtime is unavailable." >&2; exit 1; fi
 exec cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -p fv-cli -- --root "$ROOT" "$@"

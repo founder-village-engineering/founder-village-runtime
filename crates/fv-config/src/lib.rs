@@ -18,13 +18,78 @@ pub struct Config {
     pub backup: Backup,
     pub auth: Auth,
 }
+
+/// Only the provider binding needed to inspect an already allocated VM.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderCandidate {
+    pub environment: String,
+    pub project: String,
+    pub provider: Provider<Option<String>>,
+    pub root_disk_gb: Option<u64>,
+}
+
+impl ProviderCandidate {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            matches!(self.environment.as_str(), "staging" | "production")
+                && identifier(&self.project)
+                && self.project != "fv-local",
+            "candidate audit requires a valid remote environment and server name"
+        );
+        ensure!(
+            self.provider.existing_server.is_some(),
+            "candidate audit requires an existing server ID and IPv4 binding"
+        );
+        ensure!(
+            self.root_disk_gb != Some(0),
+            "candidate root disk must be positive"
+        );
+        self.provider.validate_binding(&self.environment)?;
+        if let Some(image) = &self.provider.image {
+            validate_image(image, &self.environment)?;
+        }
+        Ok(())
+    }
+}
+
+pub fn load_provider_candidate(path: &Path) -> Result<ProviderCandidate> {
+    use std::io::Read;
+    use std::os::unix::fs::MetadataExt;
+
+    const MAX_BYTES: u64 = 256 * 1024;
+    let initial = fs::symlink_metadata(path)?;
+    ensure!(
+        initial.is_file() && initial.mode() & 0o7777 == 0o600,
+        "candidate manifest requires a mode-0600 regular file"
+    );
+    let file = fs::File::open(path)?;
+    let opened = file.metadata()?;
+    ensure!(
+        opened.is_file()
+            && opened.mode() & 0o7777 == 0o600
+            && (opened.dev(), opened.ino()) == (initial.dev(), initial.ino()),
+        "candidate manifest changed while opening"
+    );
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() as u64 <= MAX_BYTES,
+        "candidate manifest is too large"
+    );
+    let candidate: ProviderCandidate = serde_json::from_slice(&bytes)
+        .map_err(|error| anyhow::anyhow!("invalid candidate manifest at line {}", error.line()))?;
+    candidate.validate()?;
+    Ok(candidate)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Provider {
+pub struct Provider<Image = String> {
     pub name: String,
     pub location: String,
     pub server_type: String,
-    pub image: String,
+    pub image: Image,
     pub ssh_key_ids: Vec<u64>,
     /// Additional project-owned resource IDs approved in the private manifest.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -36,11 +101,54 @@ pub struct Provider {
 }
 impl Provider {
     pub fn ubuntu_version(&self) -> Result<&str> {
-        match self.image.as_str() {
-            "ubuntu-24.04" => Ok("24.04"),
-            "ubuntu-26.04" => Ok("26.04"),
-            _ => bail!("remote runtime supports Ubuntu 24.04 and 26.04 LTS"),
+        ubuntu_image_version(&self.image)
+    }
+
+    fn validate(&self, environment: &str) -> Result<()> {
+        self.validate_binding(environment)?;
+        validate_image(&self.image, environment)
+    }
+}
+
+pub fn ubuntu_image_version(image: &str) -> Result<&'static str> {
+    match image {
+        "ubuntu-24.04" => Ok("24.04"),
+        "ubuntu-26.04" => Ok("26.04"),
+        _ => bail!("remote runtime supports Ubuntu 24.04 and 26.04 LTS"),
+    }
+}
+
+fn validate_image(image: &str, environment: &str) -> Result<()> {
+    ensure!(
+        !image.is_empty()
+            && image.len() < 64
+            && image
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.'),
+        "invalid OS image"
+    );
+    if environment != "local" {
+        ubuntu_image_version(image)?;
+    }
+    Ok(())
+}
+
+impl<Image> Provider<Image> {
+    fn validate_binding(&self, environment: &str) -> Result<()> {
+        ensure!(self.name == "hetzner", "unsupported provider");
+        for value in [&self.location, &self.server_type] {
+            ensure!(identifier(value), "invalid provider selection");
         }
+        if let Some(server) = &self.existing_server {
+            ensure!(
+                environment != "local"
+                    && server.id > 0
+                    && !server.ipv4.is_unspecified()
+                    && !server.ipv4.is_loopback(),
+                "invalid existing server binding"
+            );
+        }
+        Ok(())
     }
 }
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,32 +369,7 @@ impl Config {
             let net: ipnet::IpNet = cidr.parse().context("invalid SSH CIDR")?;
             ensure!(net.prefix_len() > 0, "world-open SSH forbidden");
         }
-        ensure!(self.provider.name == "hetzner", "unsupported provider");
-        for s in [&self.provider.location, &self.provider.server_type] {
-            ensure!(identifier(s), "invalid provider selection");
-        }
-        ensure!(
-            !self.provider.image.is_empty()
-                && self.provider.image.len() < 64
-                && self
-                    .provider
-                    .image
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.'),
-            "invalid OS image"
-        );
-        if self.environment != "local" {
-            self.provider.ubuntu_version()?;
-        }
-        if let Some(server) = &self.provider.existing_server {
-            ensure!(
-                self.environment != "local"
-                    && server.id > 0
-                    && !server.ipv4.is_unspecified()
-                    && !server.ipv4.is_loopback(),
-                "invalid existing server binding"
-            );
-        }
+        self.provider.validate(&self.environment)?;
         ensure!(
             self.backup.retention_days >= 30
                 && self.backup.rpo_seconds > 0
@@ -420,6 +503,42 @@ pub fn env_read(path: &Path) -> Result<BTreeMap<String, String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn candidate_verification_accepts_only_a_private_existing_binding() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let folder = std::env::temp_dir().join(format!("fv-candidate-{}", random_secret()));
+        let input = folder.join("candidate.private.json");
+        let mut fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../config/candidate.example.json")).unwrap();
+        fixture["provider"]["existing_server"]["id"] = serde_json::json!(42);
+        private_write(&input, &serde_json::to_vec(&fixture).unwrap()).unwrap();
+
+        let mut candidate = load_provider_candidate(&input).unwrap();
+        assert_eq!(candidate.provider.architecture, Architecture::Amd64);
+        assert_eq!(candidate.provider.image, None);
+        assert_eq!(candidate.root_disk_gb, Some(40));
+        assert!(serde_json::from_value::<Provider>(fixture["provider"].clone()).is_err());
+        assert!(load(&input).is_err());
+        candidate.provider.image = Some("ubuntu-22.04".into());
+        assert!(candidate.validate().is_err());
+        candidate.provider.image = Some("ubuntu-26.04".into());
+        assert!(candidate.validate().is_ok());
+        candidate.root_disk_gb = Some(0);
+        assert!(candidate.validate().is_err());
+        candidate.root_disk_gb = None;
+        candidate.provider.existing_server = None;
+        assert!(candidate.validate().is_err());
+
+        let link = folder.join("candidate-link.private.json");
+        symlink(&input, &link).unwrap();
+        assert!(load_provider_candidate(&link).is_err());
+        fs::set_permissions(&input, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(load_provider_candidate(&input).is_err());
+        fs::remove_dir_all(folder).unwrap();
+    }
+
     #[test]
     fn denies_injection() {
         assert!(!identifier("x; reboot"));

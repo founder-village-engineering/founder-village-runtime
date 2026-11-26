@@ -1,6 +1,6 @@
-use super::{Hetzner, check_attachments, check_server, list, resource_id};
+use super::{Hetzner, Target, check_attachments, check_server, list, resource_id};
 use anyhow::{Context, Result, bail, ensure};
-use fv_config::Config;
+use fv_config::{Config, ProviderCandidate};
 use reqwest::Method;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,6 +21,7 @@ const COLLECTIONS: &[&str] = &[
     "zones",
     "snapshots",
     "backups",
+    "storage_boxes",
 ];
 type Resources = BTreeMap<u64, Value>;
 type Inventory = BTreeMap<&'static str, Resources>;
@@ -43,7 +44,12 @@ impl Hetzner {
         let mut rows = Resources::new();
         for page in 1..=100 {
             let path = format!("{collection}?page={page}&per_page=50{filter}");
-            let body = self.call(Method::GET, &path, None)?;
+            let endpoint = if kind == "storage_boxes" {
+                &self.storage_endpoint
+            } else {
+                &self.endpoint
+            };
+            let body = self.request(endpoint, Method::GET, &path, None)?;
             let batch = list(&body, collection)?;
             let pagination = &body["meta"]["pagination"];
             ensure!(
@@ -76,7 +82,8 @@ impl Hetzner {
         bail!("project inventory exceeded page limit for {kind}")
     }
 
-    pub(super) fn project_inventory(&self, config: &Config) -> Result<Project> {
+    pub(super) fn project_inventory<'a>(&self, target: impl Into<Target<'a>>) -> Result<Project> {
+        let config = target.into();
         ensure!(
             config.environment != "local",
             "local manifest cannot select a provider project"
@@ -86,7 +93,7 @@ impl Hetzner {
             inventory.insert(kind, self.all_project_resources(kind)?);
         }
         let location = self
-            .find("locations", &format!("name={}", config.provider.location))?
+            .find("locations", &format!("name={}", config.location))?
             .context("Hetzner location not found")?;
         let zone = location["network_zone"]
             .as_str()
@@ -102,12 +109,31 @@ impl Hetzner {
             "binding": if config.provider.existing_server.is_some() {"server-id-and-address"} else {"registered-ssh-key-ids"}}),
         )
     }
+
+    /// Report only the verified shape and aggregate ownership evidence.
+    pub(super) fn existing_candidate(&self, candidate: &ProviderCandidate) -> Result<Value> {
+        let project = self.project_inventory(candidate)?;
+        let server = project
+            .server
+            .context("existing candidate missing from inventory")?;
+        Ok(json!({
+            "project_isolated": true,
+            "binding": "server-id-and-address",
+            "location": candidate.provider.location,
+            "server_type": candidate.provider.server_type,
+            "image": server["image"]["name"],
+            "root_disk_gb": server["primary_disk_size"].as_u64(),
+            "platform": format!("linux/{}", candidate.provider.architecture.oci()),
+            "running": server["status"] == "running",
+            "resources": project.counts
+        }))
+    }
 }
 
-fn owned<'a>(resources: &'a Resources, config: &Config, suffix: &str) -> Result<Option<&'a Value>> {
+fn owned<'a>(resources: &'a Resources, project: &str, suffix: &str) -> Result<Option<&'a Value>> {
     let mut owned = resources
         .values()
-        .filter(|row| row["labels"]["fv-owner"] == config.project);
+        .filter(|row| row["labels"]["fv-owner"] == project);
     let first = owned.next();
     ensure!(
         owned.next().is_none(),
@@ -115,19 +141,20 @@ fn owned<'a>(resources: &'a Resources, config: &Config, suffix: &str) -> Result<
     );
     if let Some(row) = first {
         ensure!(
-            row["name"] == format!("{}{suffix}", config.project),
+            row["name"] == format!("{project}{suffix}"),
             "unexpected owned resource name"
         );
     }
     Ok(first)
 }
 
-fn assess(c: &Config, all: &Inventory, zone: &str) -> Result<Project> {
+fn assess<'a>(target: impl Into<Target<'a>>, all: &Inventory, zone: &str) -> Result<Project> {
+    let c = target.into();
     let mut allowed: BTreeMap<&str, BTreeSet<u64>> = COLLECTIONS
         .iter()
         .map(|&kind| (kind, BTreeSet::new()))
         .collect();
-    for (kind, ids) in &c.provider.project_resource_ids {
+    for (kind, ids) in c.project_resource_ids {
         let expected = allowed
             .get_mut(kind.as_str())
             .context("unknown provider resource kind")?;
@@ -139,15 +166,15 @@ fn assess(c: &Config, all: &Inventory, zone: &str) -> Result<Project> {
         }
     }
     let keys = allowed.get_mut("ssh_keys").unwrap();
-    for &id in &c.provider.ssh_key_ids {
+    for &id in c.ssh_key_ids {
         ensure!(
             id != 0 && all["ssh_keys"].contains_key(&id),
             "registered project SSH key missing from token scope"
         );
         keys.insert(id);
     }
-    let labelled = owned(&all["servers"], c, "")?;
-    let server = if let Some(binding) = &c.provider.existing_server {
+    let labelled = owned(&all["servers"], c.project, "")?;
+    let server = if let Some(binding) = c.existing_server {
         ensure!(
             labelled.is_none_or(|row| row["id"] == binding.id),
             "another server claims this runtime's ownership"
@@ -159,7 +186,7 @@ fn assess(c: &Config, all: &Inventory, zone: &str) -> Result<Project> {
         )
     } else {
         ensure!(
-            !c.provider.ssh_key_ids.is_empty(),
+            !c.ssh_key_ids.is_empty(),
             "new allocation requires private registered project SSH key IDs"
         );
         labelled
@@ -187,8 +214,8 @@ fn assess(c: &Config, all: &Inventory, zone: &str) -> Result<Project> {
             );
         }
     }
-    let firewall = owned(&all["firewalls"], c, "-firewall")?;
-    let network = owned(&all["networks"], c, "-network")?;
+    let firewall = owned(&all["firewalls"], c.project, "-firewall")?;
+    let network = owned(&all["networks"], c.project, "-network")?;
     check_attachments(server, firewall, network, zone)?;
     for (kind, row) in [("firewalls", firewall), ("networks", network)] {
         if let Some(row) = row {
@@ -413,6 +440,34 @@ mod tests {
     }
 
     #[test]
+    fn storage_boxes_require_an_explicit_private_id_even_when_unassigned_or_labelled() {
+        let mut c = config();
+        let mut rows = fixture(&c);
+        let box_id = 78;
+        assert!(assess(&c, &rows, "eu-central").is_ok());
+        rows.get_mut("storage_boxes").unwrap().insert(
+            box_id,
+            json!({
+                "id":box_id, "server":null, "labels":{"fv-owner":c.project}
+            }),
+        );
+        assert!(assess(&c, &rows, "eu-central").is_err());
+        c.provider
+            .project_resource_ids
+            .insert("storage_boxes".into(), vec![79]);
+        assert!(assess(&c, &rows, "eu-central").is_err());
+        c.provider
+            .project_resource_ids
+            .insert("storage_boxes".into(), vec![box_id]);
+        assert_eq!(
+            assess(&c, &rows, "eu-central").unwrap().counts["storage_boxes"],
+            1
+        );
+        rows.get_mut("storage_boxes").unwrap().clear();
+        assert!(assess(&c, &rows, "eu-central").is_err());
+    }
+
+    #[test]
     fn live_request_path_uses_same_token_for_full_inventory_and_stops_before_mutation() {
         let c = config();
         let rows = fixture(&c);
@@ -421,8 +476,10 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let running = Arc::new(AtomicBool::new(true));
         let writes = Arc::new(AtomicUsize::new(0));
+        let redirects = Arc::new(AtomicUsize::new(0));
         let loop_running = running.clone();
         let loop_writes = writes.clone();
+        let loop_redirects = redirects.clone();
         let worker = thread::spawn(move || {
             while loop_running.load(Ordering::Acquire) {
                 let Ok((mut stream, _)) = listener.accept() else {
@@ -450,8 +507,29 @@ mod tests {
                             .map(str::to_owned)
                     })
                     .unwrap();
-                let path = request[1].trim_start_matches('/');
+                if request[1] == "/redirect-target" {
+                    loop_redirects.fetch_add(1, Ordering::SeqCst);
+                    stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                    continue;
+                }
+                let (api, path) = request[1].trim_start_matches('/').split_once('/').unwrap();
                 let (kind, query) = path.split_once('?').unwrap_or((path, ""));
+                assert_eq!(
+                    api,
+                    if kind == "storage_boxes" {
+                        "storage"
+                    } else {
+                        "cloud"
+                    }
+                );
+                if kind == "storage_boxes" && token == "storage-denied" {
+                    stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                    continue;
+                }
+                if kind == "storage_boxes" && token == "storage-redirect" {
+                    write!(stream, "HTTP/1.1 302 Found\r\nLocation: http://{address}/redirect-target\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                    continue;
+                }
                 assert!(!query.contains("selector"));
                 let page = if query.contains("page=2&") { 2 } else { 1 };
                 let index = match kind {
@@ -467,8 +545,36 @@ mod tests {
                         .unwrap_or_default()
                 };
                 let mut next = Value::Null;
+                if kind == "storage_boxes" && token == "unassigned-box" {
+                    items = vec![json!({"id":78,"server":null})];
+                }
                 if kind == "servers" {
                     match token.as_str() {
+                        token if token.starts_with("candidate-") => {
+                            items[0]["server_type"] =
+                                json!({"name":"cx23","architecture":"x86","disk":40});
+                            items[0]["image"] =
+                                json!({"name":"ubuntu-24.04","architecture":"x86","type":"system"});
+                            items[0]["primary_disk_size"] = json!(40);
+                            items[0]["status"] = json!("running");
+                            match token {
+                                "candidate-wrong-arch" => {
+                                    items[0]["image"]["architecture"] = json!("arm")
+                                }
+                                "candidate-nonstock" => {
+                                    items[0]["image"]["type"] = json!("snapshot")
+                                }
+                                "candidate-unsupported" => {
+                                    items[0]["image"]["name"] = json!("ubuntu-22.04")
+                                }
+                                "candidate-no-image-name" => {
+                                    items[0]["image"]["name"] = Value::Null
+                                }
+                                "candidate-wrong-disk" => items[0]["primary_disk_size"] = json!(80),
+                                "candidate-no-disk" => items[0]["primary_disk_size"] = Value::Null,
+                                _ => (),
+                            }
+                        }
                         "wrong-project" => items[0]["id"] = json!(43),
                         "mixed-project" if page == 1 => next = json!(2),
                         "mixed-project" => {
@@ -488,21 +594,47 @@ mod tests {
                 .unwrap();
             }
         });
-        let provider = |token: &str| Hetzner {
-            client: Client::builder()
-                .no_proxy()
-                .timeout(Duration::from_secs(3))
-                .build()
-                .unwrap(),
-            token: token.into(),
-            endpoint: format!("http://{address}"),
+        let provider = |token: &str| {
+            let mut provider =
+                Hetzner::with_token(token.into(), Client::builder().no_proxy()).unwrap();
+            assert_eq!(provider.endpoint, "https://api.hetzner.cloud/v1");
+            assert_eq!(provider.storage_endpoint, "https://api.hetzner.com/v1");
+            provider.endpoint = format!("http://{address}/cloud");
+            provider.storage_endpoint = format!("http://{address}/storage");
+            provider
         };
         let audited = provider("dedicated-project").audit(&c);
+        let mut candidate: Value =
+            serde_json::from_str(include_str!("../../../config/candidate.example.json")).unwrap();
+        candidate["project"] = json!(c.project);
+        candidate["provider"]["existing_server"] = json!(c.provider.existing_server);
+        let mut candidate: ProviderCandidate = serde_json::from_value(candidate).unwrap();
+        candidate.validate().unwrap();
+        let x86 = provider("candidate-x86").existing_candidate(&candidate);
+        let candidate_failures = [
+            "candidate-wrong-arch",
+            "candidate-nonstock",
+            "candidate-unsupported",
+            "candidate-no-image-name",
+            "candidate-wrong-disk",
+            "candidate-no-disk",
+            "wrong-project",
+        ]
+        .map(|token| provider(token).existing_candidate(&candidate));
+        candidate.provider.image = Some("ubuntu-26.04".into());
+        let explicit_mismatch = provider("candidate-x86").existing_candidate(&candidate);
+        candidate.provider.image = Some("ubuntu-24.04".into());
+        let explicit_match = provider("candidate-x86").existing_candidate(&candidate);
+        candidate.root_disk_gb = None;
+        let optional_disk = provider("candidate-no-disk").existing_candidate(&candidate);
         let blocked: Vec<_> = [
             "wrong-project",
             "mixed-project",
             "repeated-page",
             "bad-pagination",
+            "unassigned-box",
+            "storage-denied",
+            "storage-redirect",
         ]
         .map(|token| provider(token).apply(&c, None))
         .into_iter()
@@ -512,8 +644,23 @@ mod tests {
         let safe = audited.unwrap();
         assert_eq!(safe["project_isolated"], true);
         assert_eq!(safe["resources"]["servers"], 1);
+        assert_eq!(safe["resources"]["storage_boxes"], 0);
         assert!(!safe.to_string().contains("203.0.113."));
+        let x86 = x86.unwrap();
+        assert_eq!(x86["platform"], "linux/amd64");
+        assert_eq!(x86["location"], "hel1");
+        assert_eq!(x86["server_type"], "cx23");
+        assert_eq!(x86["image"], "ubuntu-24.04");
+        assert_eq!(x86["root_disk_gb"], 40);
+        assert_eq!(x86["running"], true);
+        assert!(!x86.to_string().contains("203.0.113."));
+        assert!(!x86.to_string().contains(&c.project));
+        assert!(candidate_failures.iter().all(Result::is_err));
+        assert!(explicit_mismatch.is_err());
+        assert_eq!(explicit_match.unwrap(), x86);
+        assert_eq!(optional_disk.unwrap()["root_disk_gb"], Value::Null);
         assert!(blocked.iter().all(Result::is_err));
         assert_eq!(writes.load(Ordering::SeqCst), 0);
+        assert_eq!(redirects.load(Ordering::SeqCst), 0);
     }
 }

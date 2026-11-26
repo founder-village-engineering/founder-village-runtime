@@ -1,0 +1,16 @@
+{
+  "environment": "production",
+  "project": "fv-candidate-example",
+  "root_disk_gb": 40,
+  "provider": {
+    "name": "hetzner",
+    "location": "hel1",
+    "server_type": "cx23",
+    "architecture": "amd64",
+    "ssh_key_ids": [],
+    "existing_server": {
+      "id": 0,
+      "ipv4": "192.0.2.10"
+    }
+  }
+}

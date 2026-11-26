@@ -124,7 +124,9 @@ bin/fv backup restore-drill
 
 ## Operations and production
 
-The production profile targets a Helsinki CAX11 on Ubuntu 26.04 ARM64. Tagged releases produce one signed AMD64/ARM64 image index and separate native CLI bundles. The production runbook connects the runtime API, admin, and operator SSH to the Pages app and its two apex domains.
+Run `npm run production:bootstrap -- apply` on the deployment runner to generate its private configuration, install the signed runtime, protect SSH through Cloudflare Tunnel and publish Founder Village App on all three production origins. The same command resumes an interrupted deployment. [Unattended production bootstrap and machine grants](docs/runbooks/PRODUCTION.md#unattended-production-bootstrap)
+
+The production example describes a Helsinki CAX11 on Ubuntu 26.04 ARM64. The private manifest selects the verified host type, Ubuntu release and architecture. `npm run release:local` builds and signs the target platform on the workstation. The VM imports the verified offline images and runs the precompiled CLI and services. The production runbook connects the runtime API, admin, and operator SSH to the Pages app and its two apex domains.
 
 - [Architecture and decisions](docs/adr/0001-runtime.md)
 - [Security boundaries](docs/SECURITY.md)

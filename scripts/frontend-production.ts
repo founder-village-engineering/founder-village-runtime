@@ -11,6 +11,7 @@ import {
   featureFrontendsSchema,
   frontends,
   originAllowed,
+  pagesProjectFields,
   productionOrigins,
   usesOneAliasFormat,
 } from "../packages/frontends/index.ts";
@@ -44,8 +45,7 @@ const manifestSchema = z
   .object({
     slug: z.string(),
     application: z.string(),
-    pagesProject: z.string(),
-    productionOrigin: z.string(),
+    ...pagesProjectFields,
     ...customOriginFields,
     runtimeApiOrigin: z.string().optional(),
     contractSource: z.string(),
@@ -414,6 +414,7 @@ async function main() {
         {
           app: frontend.id,
           pagesProject: frontend.pagesProject,
+          additionalPagesProjects: frontend.additionalPagesProjects ?? [],
           apiOrigin,
           adminCallback: `https://${profile.admin_domain}/auth/callback`,
           grantType: "authorization_code",
@@ -449,17 +450,23 @@ async function main() {
       throw new Error("provide the signed runtime revision with --revision");
     const settings = browserSettings(profile, frontend.id);
     Object.assign(env, settings, { FV_RUNTIME_REVISION: revision });
-    await run("npm", [
-      "run",
-      "frontend-contracts:check",
-      "--",
-      "--frontends-root",
-      root,
-      "--app",
-      frontend.id,
-    ]);
+    const publicChecks = { ...process.env };
+    delete publicChecks.CLOUDFLARE_API_TOKEN;
+    await run(
+      "npm",
+      [
+        "run",
+        "frontend-contracts:check",
+        "--",
+        "--frontends-root",
+        root,
+        "--app",
+        frontend.id,
+      ],
+      publicChecks,
+    );
     await run(process.execPath, ["scripts/probe.ts"], {
-      ...process.env,
+      ...publicChecks,
       PUBLIC_API_URL: apiOrigin,
       PUBLIC_API_REVISION: revision,
     });

@@ -13,6 +13,8 @@ import { promisify } from "node:util";
 import path from "node:path";
 import { z } from "zod";
 import { secret } from "../packages/database/index.ts";
+import { cloudApi } from "./production/discovery.ts";
+import { accessPolicies } from "./production/access.ts";
 import {
   Cloudflare,
   fingerprint,
@@ -148,21 +150,59 @@ try {
     throw new Error("private manifest required");
 
   const verifyOnly = action === "verify";
+  const selected = process.env.CLOUDFLARE_AUTH_PROFILE;
+  if (
+    selected &&
+    (selected !== "foundervillage" ||
+      process.env.CLOUDFLARE_ACCOUNT_ID !== config.cloudflare.account_id)
+  )
+    throw new Error(
+      "select the Founder Village profile and its matching account",
+    );
+  const profile = selected ? "foundervillage" : undefined;
+  const workstation =
+    Boolean(profile) || process.env.FV_CLOUDFLARE_WORKSTATION === "1";
+  if (workstation)
+    process.env.CF_WORK_DIR ??= path.resolve(".state/operator/cloudflare");
   const admins = emailList(secret("ACCESS_ADMIN_EMAILS"));
-  const operators = ssh ? emailList(secret("ACCESS_SSH_EMAILS")) : [];
+  const machineToken = process.env.FV_SSH_ACCESS_TOKEN_ID
+    ? z.uuid().parse(process.env.FV_SSH_ACCESS_TOKEN_ID)
+    : undefined;
+  if (machineToken && (!ssh || !workstation || profile))
+    throw new Error(
+      "machine SSH requires the bound token-based workstation workflow",
+    );
+  const operators =
+    ssh &&
+    (!machineToken ||
+      process.env.ACCESS_SSH_EMAILS ||
+      process.env.ACCESS_SSH_EMAILS_FILE)
+      ? emailList(secret("ACCESS_SSH_EMAILS"))
+      : [];
   // Bind every invocation to the validated account, zone, and checksum.
-  Object.assign(process.env, {
-    CF_BINARY: config.cloudflare.cf_binary,
+  const bound = {
+    CF_BINARY: workstation
+      ? path.resolve("node_modules/cf/bin/cf")
+      : config.cloudflare.cf_binary,
     CF_SHA256: config.cloudflare.cf_sha256,
     CF_ACCOUNT_ID: config.cloudflare.account_id,
     CF_ZONE_ID: config.cloudflare.zone_id,
     CF_ZONE_NAME: config.cloudflare.zone_name,
     CF_MANAGED_NAMES: config.cloudflare.managed_names.join(","),
     CF_TUNNEL_NAMES: names.join(","),
-  });
-  const token = secret("CLOUDFLARE_PROVISION_TOKEN");
-  const accountCli = (args: string[]) => runCloudflareCli(args, token);
+  };
+  for (const key of Object.keys(bound)) delete process.env[key + "_FILE"];
+  Object.assign(process.env, bound);
+  const auth = profile
+    ? { profile: "foundervillage" as const }
+    : { token: secret("CLOUDFLARE_PROVISION_TOKEN") };
+  const accountCli = (args: string[]) => runCloudflareCli(args, auth);
+  const zoneReader = new Cloudflare(false, profile);
+  step =
+    "verify that the active DNS zone belongs to the configured Cloudflare account";
+  await zoneReader.verifyZoneOwnership();
   async function write(args: string[], body: object) {
+    await zoneReader.verifyZoneOwnership();
     const working = path.resolve(secret("CF_WORK_DIR"));
     await mkdir(working, { recursive: true, mode: 0o700 });
     const dir = await mkdtemp(path.join(working, "fv-cf-request-"));
@@ -176,7 +216,7 @@ try {
   }
 
   step = "check DNS for direct origin records and conflicting routes";
-  const cf = new Cloudflare(!verifyOnly);
+  const cf = verifyOnly ? zoneReader : new Cloudflare(true, profile);
   const origin = config.provider.existing_server?.ipv4;
   if (origin) {
     const matches = z
@@ -249,17 +289,18 @@ try {
       throw new Error("existing tunnel routes require explicit review");
   }
 
-  async function accessApp(hostname: string, role: string, emails: string[]) {
+  async function accessApp(
+    hostname: string,
+    role: "admin" | "ssh",
+    emails: string[],
+  ) {
     const command = ["zero-trust", "access", "applications"];
     const name = `${config.project}-${role}`;
-    const policy = {
-      name:
-        role === "admin" ? "fv-named-administrators" : "fv-named-ssh-operators",
-      decision: "allow",
-      include: emails.map((email) => ({ email: { email } })),
-      require: [{ auth_method: { auth_method: "mfa" } }],
-      precedence: 1,
-    };
+    const { workforce, machine, policies } = accessPolicies(
+      role,
+      emails,
+      machineToken,
+    );
     const matches = z
       .array(appSchema)
       .max(1)
@@ -294,23 +335,57 @@ try {
           type: "self_hosted",
           session_duration: "1h",
           app_launcher_visible: false,
-          policies: [policy],
+          policies,
         }),
       ).id;
-    const app = appSchema.parse(await accountCli([...command, "get", id]));
-    const [checked, ...others] = app.policies ?? [];
+    const get = async () => {
+      const app = appSchema.parse(await accountCli([...command, "get", id]));
+      if (
+        app.id !== id ||
+        app.name !== name ||
+        app.domain !== hostname ||
+        app.type !== "self_hosted"
+      )
+        throw new Error("Access application ownership changed");
+      return app;
+    };
+    let app = await get();
+    const matchesPolicy = (
+      actual: NonNullable<typeof app.policies>[number],
+      wanted: (typeof policies)[number],
+    ) =>
+      actual.name === wanted.name &&
+      actual.decision === wanted.decision &&
+      actual.exclude.length === 0 &&
+      fingerprint(actual.require) === fingerprint(wanted.require) &&
+      actual.include.map(fingerprint).sort().join() ===
+        wanted.include.map(fingerprint).sort().join();
+    // Add a machine to an existing, exactly matched MFA SSH application without
+    // replacing other settings or touching the admin application.
     if (
-      app.name !== name ||
-      app.domain !== hostname ||
-      app.type !== "self_hosted" ||
-      !checked ||
-      others.length ||
-      checked.name !== policy.name ||
-      checked.decision !== "allow" ||
-      checked.exclude.length ||
-      fingerprint(checked.require) !== fingerprint(policy.require) ||
-      checked.include.map(fingerprint).sort().join() !==
-        policy.include.map(fingerprint).sort().join()
+      !verifyOnly &&
+      machine &&
+      emails.length &&
+      app.policies?.length === 1 &&
+      matchesPolicy(app.policies[0]!, workforce)
+    ) {
+      await zoneReader.verifyZoneOwnership();
+      await cloudApi(secret("CLOUDFLARE_PROVISION_TOKEN"))(
+        "accounts/" +
+          config.cloudflare.account_id +
+          "/access/apps/" +
+          id +
+          "/policies",
+        "POST",
+        machine,
+      );
+      app = await get();
+    }
+    if (
+      app.policies?.length !== policies.length ||
+      !policies.every((wanted) =>
+        app.policies?.some((p) => matchesPolicy(p, wanted)),
+      )
     )
       throw new Error("Access policy verification failed");
     return z.string().min(1).parse(app.aud);
@@ -381,13 +456,15 @@ try {
     throw new Error("tunnel route verification failed");
 
   step = "converge and read back proxied CNAME records";
-  for (const [index, name] of names.entries())
+  for (const [index, name] of names.entries()) {
+    if (!verifyOnly) await zoneReader.verifyZoneOwnership();
     await cf.ensureTunnelRecord(
       name,
       tunnel.id,
       records[index] ?? null,
       verifyOnly,
     );
+  }
   if (verifyOnly) {
     step = "verify the active connector and configured Access audience";
     if (
@@ -403,16 +480,6 @@ try {
       .max(8000)
       .regex(/^[A-Za-z0-9_+/=-]+$/)
       .parse(await accountCli(["tunnels", "token", "get", tunnel.id]));
-    const envPath = `.state/${config.environment}.env`;
-    const state = `.state/${config.environment}/tunnel`;
-    const active = (await readFile(envPath, "utf8"))
-      .split("\n")
-      .filter(
-        (line) =>
-          line &&
-          !line.startsWith("ACCESS_AUD=") &&
-          !line.startsWith("CLOUDFLARE_TUNNEL_TOKEN="),
-      );
     async function publish(destination: string, value: string) {
       const temp = `${destination}.${randomUUID()}.next`;
       await writeFile(temp, value, { mode: 0o600, flag: "wx" });
@@ -425,13 +492,30 @@ try {
       access_aud: aud,
     };
     await publish(file, JSON.stringify(document, null, 2) + "\n");
-    await mkdir(state, { recursive: true, mode: 0o700 });
-    await publish(`${state}/token`, connector);
-    await publish(
-      envPath,
-      active.join("\n") +
-        `\nACCESS_AUD=${aud}\nCLOUDFLARE_TUNNEL_TOKEN=${connector}\n`,
-    );
+    if (workstation) {
+      // Only the connector credential and updated manifest cross into the host catalog.
+      const target = path.join(secret("CF_WORK_DIR"), config.environment);
+      await mkdir(target, { recursive: true, mode: 0o700 });
+      await publish(path.join(target, "connector.token"), connector);
+    } else {
+      const envPath = `.state/${config.environment}.env`;
+      const state = `.state/${config.environment}/tunnel`;
+      const active = (await readFile(envPath, "utf8"))
+        .split("\n")
+        .filter(
+          (line) =>
+            line &&
+            !line.startsWith("ACCESS_AUD=") &&
+            !line.startsWith("CLOUDFLARE_TUNNEL_TOKEN="),
+        );
+      await mkdir(state, { recursive: true, mode: 0o700 });
+      await publish(`${state}/token`, connector);
+      await publish(
+        envPath,
+        active.join("\n") +
+          `\nACCESS_AUD=${aud}\nCLOUDFLARE_TUNNEL_TOKEN=${connector}\n`,
+      );
+    }
   }
   console.log(
     JSON.stringify({

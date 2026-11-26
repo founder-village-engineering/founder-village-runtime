@@ -15,10 +15,17 @@ pub fn run(
             fv_host::docker_architecture()? == c.provider.architecture,
             "Docker architecture mismatch"
         );
+        let installed = fv_ops::workstation::Manifest::installed(root, c.provider.architecture)?;
+        installed.load_images(root)?;
     }
     fv_ops::render::init(root, c)?;
+    let startup = if c.environment == "local" {
+        vec!["up", "-d", "--build", "--wait"]
+    } else {
+        vec!["up", "-d", "--no-build", "--pull", "never", "--wait"]
+    };
     for args in [
-        vec!["up", "-d", "--build", "--wait", "postgres", "rabbitmq"],
+        [startup.as_slice(), &["postgres", "rabbitmq"]].concat(),
         vec![
             "exec",
             "-T",
@@ -40,7 +47,11 @@ pub fn run(
             "-ceu",
             "cp /run/fv/definitions.json /etc/rabbitmq/definitions.json; chown rabbitmq:rabbitmq /etc/rabbitmq/definitions.json; chmod 600 /etc/rabbitmq/definitions.json; rabbitmqctl import_definitions /etc/rabbitmq/definitions.json",
         ],
-        vec!["up", "-d", "--wait", "hasura"],
+        if c.environment == "local" {
+            vec!["up", "-d", "--wait", "hasura"]
+        } else {
+            [startup.as_slice(), &["hasura"]].concat()
+        },
     ] {
         execute(&mut fv_ops::compose_command(root, c, &args), 3600)?;
     }
@@ -50,8 +61,7 @@ pub fn run(
         .chain((c.environment == "local").then_some("scripts/seed.ts"))
     {
         execute(
-            Command::new("node")
-                .args(["--import", "tsx", script])
+            fv_host::node_command(root, &["--import", "tsx", script])?
                 .current_dir(root)
                 .envs(&env),
             120,

@@ -3,10 +3,48 @@ use fv_config::{Config, digest, private_write};
 use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
 use sha2::Sha256;
-use std::{collections::BTreeMap, fs, path::Path, process::Command};
+use std::{collections::BTreeMap, fs, path::Path};
+
+/// The workstation stores this encrypted verifier independently of the mirrored
+/// recovery bundle. Existing backups retain their original signing key.
+pub fn escrow_verifier(root: &Path, c: &Config) -> Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    ensure!(c.environment == "production", "production escrow required");
+    let env = super::env(root, c)?;
+    let recipient = env
+        .get("AGE_RECIPIENT")
+        .context("recovery recipient missing")?;
+    let key = env
+        .get("BACKUP_HMAC_KEY")
+        .context("backup verifier missing")?;
+    ensure!(
+        recipient.starts_with("age1")
+            && recipient.bytes().all(|b| b.is_ascii_alphanumeric())
+            && key.len() == 64
+            && key.bytes().all(|b| b.is_ascii_hexdigit()),
+        "invalid recovery settings"
+    );
+    let mut age = Command::new("/usr/bin/age")
+        .args(["--armor", "-r", recipient])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    age.stdin
+        .take()
+        .context("age input unavailable")?
+        .write_all(key.as_bytes())?;
+    let encrypted = age.wait_with_output()?;
+    ensure!(encrypted.status.success(), "backup verifier escrow failed");
+    println!(
+        "{}",
+        json!({"fingerprint": digest(key.as_bytes()), "encrypted": std::str::from_utf8(&encrypted.stdout)?})
+    );
+    Ok(())
+}
 fn info(root: &Path, c: &Config) -> Result<Value> {
     let env_file = format!(".state/{}.env", c.environment);
-    let output = Command::new("docker")
+    let output = fv_host::docker(root)
         .current_dir(root)
         .args([
             "compose",
@@ -79,7 +117,7 @@ pub fn capture(root: &Path, c: &Config, kind: &str) -> Result<()> {
         ],
     )?;
     let inventory = info(root, c)?;
-    let database_list = Command::new("docker")
+    let database_list = fv_host::docker(root)
         .args([
             "exec",
             &format!("{}-postgres-1", c.project),
@@ -257,7 +295,7 @@ pub fn restore_drill(root: &Path, c: &Config) -> Result<()> {
     let marker = format!("fv-drill-{}", &fv_config::random_secret()[..12]);
     let source = format!("{}-postgres-1", c.project);
     let sql = format!("SELECT pg_create_restore_point('{marker}'); SELECT pg_switch_wal();");
-    let point = Command::new("docker")
+    let point = fv_host::docker(root)
         .args([
             "exec",
             &source,
@@ -308,7 +346,13 @@ pub fn restore_drill(root: &Path, c: &Config) -> Result<()> {
         &fv_config::random_secret()[..12]
     );
     let state = root.join(format!(".state/{}", c.environment));
-    let image = format!("fv-postgres:{}", c.environment);
+    let image = if c.environment == "local" {
+        format!("fv-postgres:{}", c.environment)
+    } else {
+        let installed = super::workstation::Manifest::installed(root, c.provider.architecture)?;
+        installed.load_images(root)?;
+        installed.images["postgres"].tag.clone()
+    };
     let mount = format!(
         "type=bind,source={},target=/run/fv/config,readonly",
         state.join("postgres/pgbackrest.conf").display()
@@ -330,6 +374,8 @@ pub fn restore_drill(root: &Path, c: &Config) -> Result<()> {
         "docker",
         &[
             "run",
+            "--pull",
+            "never",
             "-d",
             "--name",
             &name,
@@ -352,14 +398,14 @@ pub fn restore_drill(root: &Path, c: &Config) -> Result<()> {
     let result = (|| -> Result<()> {
         let mut ready = false;
         for _ in 0..180 {
-            let check = Command::new("docker")
+            let check = fv_host::docker(root)
                 .args(["exec", &name, "pg_isready", "-h", "/tmp", "-U", "postgres"])
                 .output()?;
             if check.status.success() {
                 ready = true;
                 break;
             }
-            let state = Command::new("docker")
+            let state = fv_host::docker(root)
                 .args(["inspect", "--format", "{{.State.Running}}", &name])
                 .output()?;
             ensure!(
@@ -371,7 +417,7 @@ pub fn restore_drill(root: &Path, c: &Config) -> Result<()> {
         ensure!(ready, "isolated restore did not become ready");
         let consistency =
             format!("SELECT NOT pg_is_in_recovery() AND pg_last_wal_replay_lsn()>='{lsn}'::pg_lsn");
-        let checked = Command::new("docker")
+        let checked = fv_host::docker(root)
             .args([
                 "exec",
                 "-u",
@@ -400,7 +446,7 @@ pub fn restore_drill(root: &Path, c: &Config) -> Result<()> {
             "SELECT count(*) FROM public.fv_migrations; SELECT count(*) FROM control.audit;".into(),
         ));
         for (database, query) in &targets {
-            let out = Command::new("docker")
+            let out = fv_host::docker(root)
                 .args([
                     "exec",
                     "-u",
@@ -441,7 +487,7 @@ pub fn restore_drill(root: &Path, c: &Config) -> Result<()> {
         Ok(())
     })();
     if result.is_err()
-        && let Ok(logs) = Command::new("docker").args(["logs", &name]).output()
+        && let Ok(logs) = fv_host::docker(root).args(["logs", &name]).output()
     {
         let mut bytes = logs.stdout;
         bytes.extend(logs.stderr);

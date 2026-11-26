@@ -31,6 +31,7 @@ Copy `assets/project.example.json` into an ignored path such as `founder-village
 
 - an optional `customOrigin` for a one-label HTTPS alias under `foundervillage.xyz`, or `customOrigins` for multiple exact aliases. The production primary app uses the approved `founderhaus.org` and `foundervillage.org` apexes. Register each alias with Pages, DNS and OIDC;
 - `productionOrigin` equal to `https://<pagesProject>.pages.dev`;
+- optional `additionalPagesProjects` for exact Pages project names that receive the same build. Register each derived `https://<project>.pages.dev` origin with the runtime and OIDC;
 - `contractSource` equal to `packages/frontend-contracts/<slug>`;
 - the frontend slug, application mapping, database/Hasura source, frontend path, and generated contract ownership explicit.
 

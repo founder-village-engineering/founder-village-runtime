@@ -43,7 +43,7 @@ Canonical browser contracts are organized by frontend under `packages/frontend-c
 npm run frontend-contracts:watch -- --frontends-root ../founder-village-frontends
 ```
 
-Use `frontend-contracts:sync` for a one-shot update and `frontend-contracts:check` in verification. A runtime push that changes canonical contracts or the frontend registry runs `.github/workflows/sync-frontend-contracts.yml`; after the repository secret `FOUNDER_VILLAGE_FRONTENDS_SYNC_TOKEN` is configured, that workflow opens a checksummed update pull request in `founder-village-frontends`.
+Use `frontend-contracts:sync` for a one-shot update and `frontend-contracts:check` in verification. Run both against the sibling frontend checkout before publishing either repository. The expanded workstation release check also verifies those generated snapshots.
 
 The repository-owned `$create-founder-village-app` skill under `.agents/skills/` contains the complete reusable workflow and cross-repository audit scripts.
 

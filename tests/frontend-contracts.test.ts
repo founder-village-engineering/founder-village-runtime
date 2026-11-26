@@ -87,6 +87,7 @@ test("food delivery inputs reject unknown fields and malformed expenses", () => 
 test("the primary surface is confined to each feature's registered routes", () => {
   for (const origin of [
     "https://founder-village-app.pages.dev",
+    "https://founder-village-apps.pages.dev",
     "https://founderhaus.org",
     "https://foundervillage.org",
     "https://app.fv",
@@ -111,12 +112,11 @@ test("the primary surface is confined to each feature's registered routes", () =
       assert(!registeredOrigin(origin, path));
     assert(!originAllowed("founder-village-team", origin, "/v1/members/me"));
   }
-  assert(
-    !registeredOrigin(
-      "https://branch.founder-village-app.pages.dev",
-      "/v1/team/tenants",
-    ),
-  );
+  for (const origin of [
+    "https://branch.founder-village-app.pages.dev",
+    "https://branch.founder-village-apps.pages.dev",
+  ])
+    assert(!registeredOrigin(origin, "/v1/team/tenants"));
 });
 
 test("API preflights only registered origins and preserves denial headers", async (t) => {

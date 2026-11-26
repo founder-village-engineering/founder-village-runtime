@@ -19,7 +19,9 @@ try {
   await readFile(`${dir}/manifest.json`);
   await exec(
     process.execPath,
-    ["--import", "tsx", "scripts/verify-recovery.ts", dir],
+    import.meta.url.endsWith(".js")
+      ? ["dist/scripts/verify-recovery.js", dir]
+      : ["--import", "tsx", "scripts/verify-recovery.ts", dir],
     { timeout: 30000 },
   );
   console.log("existing recovery bundle verified");
@@ -113,7 +115,9 @@ await writeFile(`${dir}/manifest.json`, JSON.stringify({ body, signature }), {
 });
 await exec(
   process.execPath,
-  ["--import", "tsx", "scripts/verify-recovery.ts", dir],
+  import.meta.url.endsWith(".js")
+    ? ["dist/scripts/verify-recovery.js", dir]
+    : ["--import", "tsx", "scripts/verify-recovery.ts", dir],
   { timeout: 30000 },
 );
 console.log(

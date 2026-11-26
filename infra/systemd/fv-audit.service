@@ -4,6 +4,6 @@ Description=Founder Village independent audit checkpoint
 User=fv-domain
 WorkingDirectory=@ROOT@
 EnvironmentFile=/etc/fv/domain.env
-ExecStart=/usr/local/bin/node --import tsx @ROOT@/scripts/archive-audit.ts
+ExecStart=@ROOT@/.fv-current/node @ROOT@/dist/scripts/archive-audit.js
 UMask=0077
 NoNewPrivileges=yes

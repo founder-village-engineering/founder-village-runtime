@@ -1,8 +1,18 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { isIP } from "node:net";
+import { pinnedSshOptions } from "./production/ssh.ts";
 import { tmpdir } from "node:os";
 import { z } from "zod";
 import path from "node:path";
@@ -15,25 +25,23 @@ const options = z
     knownHosts: z.string(),
     identityFile: z.string().optional(),
     initialRootPublicKey: z.string().optional(),
-    source: z.string(),
-    sourceBundle: z.string(),
-    binary: z.string(),
-    binaryBundle: z.string(),
+    initialRootIdentityFile: z.string().optional(),
+    allowedSigners: z.string(),
+    releaseDirectory: z.string(),
     config: z.string(),
-    manifest: z.string(),
-    manifestBundle: z.string(),
   })
   .strict();
-const release = z
-  .object({
-    version: z.literal(2),
-    revision: z.string().regex(/^[a-f0-9]{40}$/),
-    image: z.string(),
-    sourceSha256: sha256,
-    binaries: z.object({ amd64: sha256, arm64: sha256 }),
-    files: z.array(z.object({ path: z.string(), sha256 })).min(1),
-  })
-  .strict();
+const release = z.object({
+  version: z.literal(3),
+  distribution: z.literal("workstation"),
+  revision: z.string().regex(/^[a-f0-9]{40}$/),
+  architecture: z.enum(["amd64", "arm64"]),
+  sourceSha256: sha256,
+  binarySha256: sha256,
+  imageArchiveSha256: sha256,
+  sbomSha256: sha256,
+  runtimeArchiveSha256: sha256,
+});
 const target = z.object({
   project: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
   environment: z.enum(["staging", "production"]),
@@ -55,7 +63,11 @@ function sh(arg: string) {
 
 async function privateFile(file: string) {
   const info = await lstat(file);
-  if (!info.isFile() || (info.mode & 0o077) !== 0)
+  if (
+    !info.isFile() ||
+    info.uid !== process.getuid?.() ||
+    (info.mode & 0o077) !== 0
+  )
     throw new Error(
       "private bootstrap inputs require a mode-0600 regular file",
     );
@@ -77,62 +89,43 @@ try {
   await exec("bin/fv", ["--config", configFile, "validate"], {
     timeout: 120_000,
   });
-  const viaTunnel = isIP(args.host) === 0;
-  if (viaTunnel && args.host !== cloudflare.ssh_domain)
-    throw new Error("SSH hostname must match the configured tunnel");
-  if (args.initialRootPublicKey && provider.existing_server?.ipv4 !== args.host)
-    throw new Error(
-      "initial root enrollment requires the bound existing server IPv4",
-    );
-  const knownHosts = path.resolve(args.knownHosts);
-  if (/[\r\n\0%]/.test(knownHosts) || !(await lstat(knownHosts)).isFile())
-    throw new Error("a dedicated known_hosts file is required");
-  const sshOptions = [
-    "-F",
-    "/dev/null",
-    "-T",
-    "-o",
-    "StrictHostKeyChecking=yes",
-    "-o",
-    `UserKnownHostsFile="${knownHosts.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`,
-    "-o",
-    "GlobalKnownHostsFile=none",
-    "-o",
-    "HostKeyAlgorithms=ssh-ed25519",
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "IdentitiesOnly=yes",
-    "-o",
-    "ClearAllForwardings=yes",
-    "-o",
-    "ForwardAgent=no",
-    "-o",
-    "ConnectTimeout=10",
-    "-o",
-    "ServerAliveInterval=15",
-    "-o",
-    "ServerAliveCountMax=3",
-    ...(viaTunnel
-      ? ["-o", "ProxyCommand=cloudflared access ssh --hostname %h"]
-      : []),
-    ...(args.identityFile ? ["-i", path.resolve(args.identityFile)] : []),
-  ];
+  const sshOptions = await pinnedSshOptions(
+    args,
+    provider.existing_server?.ipv4,
+    cloudflare.ssh_domain,
+  );
   async function ssh(
     user: "fv" | "root",
     command: string,
     timeout: number,
-    input?: Buffer,
+    input?: Buffer | Readable,
   ) {
+    const identity =
+      user === "root"
+        ? (args.initialRootIdentityFile ?? args.identityFile)
+        : args.identityFile;
     const running = exec(
       "ssh",
-      [...sshOptions, "-l", user, args.host, command],
+      [
+        ...sshOptions,
+        ...(identity ? ["-i", path.resolve(identity)] : []),
+        "-l",
+        user,
+        args.host,
+        command,
+      ],
       {
         timeout,
         maxBuffer: 2 * 1024 * 1024,
       },
     );
-    if (input) {
+    if (input instanceof Readable && running.child.stdin) {
+      const result = await Promise.all([
+        running,
+        pipeline(input, running.child.stdin),
+      ]);
+      return result[0].stdout.trim();
+    } else if (input instanceof Buffer) {
       running.child.stdin?.on("error", () => {});
       running.child.stdin?.end(input);
     } else {
@@ -141,65 +134,117 @@ try {
     return (await running).stdout.trim();
   }
 
-  step = "verify the release workflow signatures and artifact bindings";
-  const policy = z
-    .object({
-      issuer: z.string(),
-      identityPattern: z.string(),
-      registryPrefix: z.string(),
-    })
-    .parse(JSON.parse(await readFile("policies/release.json", "utf8")));
-  const [source, binary, manifest] = await Promise.all([
-    readFile(args.source),
-    readFile(args.binary),
-    readFile(args.manifest),
-  ]);
-  const metadata = release.parse(JSON.parse(manifest.toString()));
+  step = "verify the independently pinned workstation signature and platform";
+  const directory = await realpath(args.releaseDirectory);
+  const signersPath = await realpath(args.allowedSigners);
+  if (signersPath.startsWith(directory + path.sep) || signersPath === directory)
+    throw new Error(
+      "release trust must be provisioned outside the artifact directory",
+    );
+  const signerStat = await lstat(args.allowedSigners);
   if (
-    !metadata.image.startsWith(policy.registryPrefix) ||
-    !sha256.safeParse(metadata.image.slice(policy.registryPrefix.length))
-      .success ||
-    digest(source) !== metadata.sourceSha256 ||
-    digest(binary) !== metadata.binaries[arch] ||
-    binary.length < 64 ||
-    binary.readUInt32BE(0) !== 0x7f454c46 ||
-    binary[4] !== 2 ||
-    binary[5] !== 1 ||
-    binary.readUInt16LE(18) !== (arch === "arm64" ? 183 : 62)
+    !signerStat.isFile() ||
+    signerStat.uid !== process.getuid?.() ||
+    (signerStat.mode & 0o022) !== 0
   )
-    throw new Error("release artifact or architecture mismatch");
-  // Verify the same bytes that will be uploaded, even if the input files change.
-  const verified = await mkdtemp(path.join(tmpdir(), "fv-release-verify-"));
-  try {
-    for (const [bytes, bundle] of [
-      [manifest, args.manifestBundle],
-      [source, args.sourceBundle],
-      [binary, args.binaryBundle],
-    ] as const) {
-      const snapshot = path.join(verified, "artifact");
-      await writeFile(snapshot, bytes, { mode: 0o600 });
-      await exec(
-        "cosign",
-        [
-          "verify-blob",
-          "--bundle",
-          path.resolve(bundle),
-          "--certificate-identity-regexp",
-          policy.identityPattern,
-          "--certificate-oidc-issuer",
-          policy.issuer,
-          snapshot,
-        ],
-        { timeout: 120_000 },
-      );
-    }
-  } finally {
-    await rm(verified, { recursive: true, force: true });
+    throw new Error("the release trust file must be owner controlled");
+  const signers = await readFile(signersPath);
+  if (
+    !/^founder-village-release namespaces="fv-release-v3" ssh-ed25519 [A-Za-z0-9+/]+={0,2}\n?$/.test(
+      signers.toString("utf8"),
+    )
+  )
+    throw new Error("pin exactly one Founder release Ed25519 signer");
+  async function artifact(name: string, limit?: number) {
+    const file = path.join(directory, name);
+    const st = await lstat(file);
+    if (!st.isFile() || (limit !== undefined && st.size > limit))
+      throw new Error("invalid release artifact");
+    return { file, size: st.size };
   }
-
+  const manifest = await readFile(
+    (await artifact("source-manifest.json", 32 * 1024 * 1024)).file,
+  );
+  const signature = await readFile(
+    (await artifact("source-manifest.json.sig", 16 * 1024)).file,
+  );
+  const proof = await mkdtemp(path.join(tmpdir(), "fv-release-verify-"));
+  try {
+    await writeFile(path.join(proof, "signers"), signers, { mode: 0o600 });
+    await writeFile(path.join(proof, "signature"), signature, { mode: 0o600 });
+    const verification = exec(
+      "ssh-keygen",
+      [
+        "-Y",
+        "verify",
+        "-f",
+        path.join(proof, "signers"),
+        "-I",
+        "founder-village-release",
+        "-n",
+        "fv-release-v3",
+        "-s",
+        path.join(proof, "signature"),
+      ],
+      { timeout: 10_000 },
+    );
+    verification.child.stdin?.on("error", () => {});
+    verification.child.stdin?.end(manifest);
+    await verification;
+  } finally {
+    await rm(proof, { force: true, recursive: true });
+  }
+  const metadata = release.parse(JSON.parse(manifest.toString()));
+  if (metadata.architecture !== arch) throw new Error("wrong release platform");
+  const bytes = new Map<string, Buffer>([
+    ["runtime.json", config],
+    ["source-manifest.json", manifest],
+    ["source-manifest.json.sig", signature],
+    ["signers", signers],
+  ]);
+  const paths = new Map<string, string>();
+  const hashes = new Map<string, string>(
+    Array.from(bytes, ([k, v]) => [k, digest(v)]),
+  );
+  let upload = 0;
+  let unpacked = 0;
+  for (const [name, want] of [
+    ["source.tar", metadata.sourceSha256],
+    ["fv", metadata.binarySha256],
+    ["runtime.tar", metadata.runtimeArchiveSha256],
+    ["sbom.cdx.json", metadata.sbomSha256],
+    ["image.tar", metadata.imageArchiveSha256],
+  ] as const) {
+    const { file, size } = await artifact(name);
+    const hash = createHash("sha256");
+    for await (const chunk of createReadStream(file)) hash.update(chunk);
+    if (hash.digest("hex") !== want)
+      throw new Error("artifact checksum mismatch");
+    if (name === "fv") {
+      const header = (await readFile(file)).subarray(0, 64);
+      if (
+        header.length < 64 ||
+        header.readUInt32BE(0) !== 0x7f454c46 ||
+        header[4] !== 2 ||
+        header[5] !== 1 ||
+        header.readUInt16LE(18) !== (arch === "arm64" ? 183 : 62)
+      )
+        throw new Error("wrong native binary platform");
+    }
+    hashes.set(name, want);
+    paths.set(name, file);
+    upload += size;
+    // Source and runtime expand once locally; image storage may grow by the
+    // uncompressed archive size when Docker loads the protected candidate.
+    unpacked += size;
+  }
+  const requiredKiB = Math.ceil((upload + unpacked) / 1024) + 2 * 1024 * 1024;
   const preflight = [
     "set -eu",
     ". /etc/os-release",
+    "command -v ssh-keygen >/dev/null",
+    `test "$(df -Pk /opt | awk 'NR==2{print $4}')" -ge ${requiredKiB}`,
+    `if test -e /etc/fv/release.allowed_signers || test -L /etc/fv/release.allowed_signers; then test ! -L /etc/fv/release.allowed_signers; test "$(stat -c %u /etc/fv/release.allowed_signers)" = 0; echo "${digest(signers)}  /etc/fv/release.allowed_signers" | sha256sum --check --status; fi`,
     `test "$ID" = ubuntu && test "ubuntu-$VERSION_ID" = ${sh(provider.image)}`,
     `test "$(dpkg --print-architecture)" = ${sh(arch)}`,
     `test "$(hostname -s)" = ${sh(project)}`,
@@ -232,12 +277,6 @@ try {
     await ssh("fv", elevated(preflight), 30_000);
   }
 
-  const inputs = {
-    "source.tar": source,
-    fv: binary,
-    "runtime.json": config,
-    "source-manifest.json": manifest,
-  };
   step = "create protected temporary upload storage";
   const temporary = await ssh(
     "fv",
@@ -247,35 +286,38 @@ try {
   if (!/^\/opt\/\.fv-bootstrap\.[a-zA-Z0-9]{10}$/.test(temporary))
     throw new Error("unexpected temporary path");
   try {
-    for (const [name, content] of Object.entries(inputs)) {
+    for (const name of hashes.keys()) {
       step = `upload verified ${name}`;
       await ssh(
         "fv",
         elevated(`umask 077; cat > ${temporary}/${name}`),
-        120_000,
-        content,
+        1_800_000,
+        bytes.get(name) ?? createReadStream(paths.get(name)!),
       );
     }
-    step = "verify uploaded bytes and install the signed runtime";
-    const checks = Object.entries(inputs)
-      .map(([name, bytes]) => `${digest(bytes)}  ${name}`)
-      .join("\n");
+    step = "verify the transfer and install the signed runtime";
+    const checks = Array.from(
+      hashes,
+      ([name, hash]) => `${hash}  ${name}`,
+    ).join("\n");
     const install = await readFile("infra/templates/install-release.sh");
     await ssh(
       "fv",
       elevated(
-        `set -eu; cd ${temporary}; printf '%s\\n' ${sh(checks)} | sha256sum --check --status; exec /bin/bash -s -- ${environment} ${sh(project)}`,
+        `set -eu; cd ${temporary}; printf '%s\\n' ${sh(checks)} | sha256sum --check --status; exec /bin/bash -s -- ${environment} ${sh(project)} ${arch} ${metadata.revision}`,
       ),
-      180_000,
+      1_800_000,
       install,
     );
-    step = "converge the owned host";
+    step = "prepare offline images or converge a fresh owned host";
+    const root = "/opt/founder-village",
+      targetConfig = `config/${environment}.private.json`;
     await ssh(
       "fv",
-      "sudo -n /opt/founder-village/bin/fv --config config/" +
-        environment +
-        ".private.json host apply",
-      1_200_000,
+      elevated(
+        `set -eu; cd ${root}; if test -f .state/${environment}/current-release; then .fv-releases/${metadata.revision}/target/release/fv --config ${targetConfig} release stage --revision ${metadata.revision}; else bin/fv --config ${targetConfig} host apply; fi`,
+      ),
+      1_800_000,
     );
   } finally {
     await ssh("fv", elevated(`rm -rf -- ${temporary}`), 30_000).catch(() => {
@@ -285,7 +327,7 @@ try {
     });
   }
   console.log(
-    `Installed verified Linux ${arch} runtime ${metadata.revision}. Install the private secret catalog before starting services.`,
+    `Verified Linux ${arch} runtime ${metadata.revision} available for protected promotion.`,
   );
 } catch {
   console.error(`Remote bootstrap failed while attempting to ${step}.`);

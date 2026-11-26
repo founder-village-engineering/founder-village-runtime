@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 import { secret } from "../packages/database/index.ts";
 const exec = promisify(execFile),
@@ -57,23 +59,81 @@ for (let minor = Number(current.split(".")[1]) + 1; minor <= 3; minor++) {
     { timeout: 60000 },
   );
   const image = minor === 3 ? final : bridges.rabbitmq[`4.${minor}`];
-  if (!image?.includes("@sha256:"))
-    throw new Error("missing pinned intermediate upgrade");
+  if (
+    !image ||
+    /^rabbitmq:4\.(\d+)(?:\.[0-9]+)?-management@sha256:[a-f0-9]{64}$/.exec(
+      image,
+    )?.[1] !== String(minor)
+  )
+    throw new Error("missing pinned broker upgrade image");
   const options = {
     timeout: 300000,
     maxBuffer: 4 * 1024 * 1024,
     env: { ...process.env, RABBITMQ_IMAGE: image },
   };
-  await exec(
-    "docker",
-    [...args, "build", "--build-arg", `RABBITMQ_IMAGE=${image}`, "rabbitmq"],
-    options,
-  );
-  await exec(
-    "docker",
-    [...args, "up", "-d", "--no-deps", "--wait", "rabbitmq"],
-    options,
-  );
+  if (environment === "local") {
+    await exec(
+      "docker",
+      [...args, "build", "--build-arg", "RABBITMQ_IMAGE=" + image, "rabbitmq"],
+      options,
+    );
+    await exec(
+      "docker",
+      [...args, "up", "-d", "--no-deps", "--wait", "rabbitmq"],
+      options,
+    );
+  } else {
+    // The intermediate version runs the same signed entrypoint read-only
+    // over the pinned vendor image. The final wrapper is already built.
+    const temporary = await mkdtemp(join(tmpdir(), "fv-broker-upgrade-"));
+    try {
+      const overlay = join(temporary, "broker.json");
+      const finalImage = z
+        .string()
+        .regex(/^fv-rabbitmq:local-[0-9a-f]{40}$/)
+        .parse(secret("FV_RABBITMQ_IMAGE"));
+      const service =
+        minor === 3
+          ? { image: finalImage }
+          : {
+              image,
+              entrypoint: ["/bin/sh", "/run/fv-upgrade-entrypoint"],
+              command: ["rabbitmq-server"],
+              volumes: [
+                {
+                  type: "bind",
+                  source: resolve("infra/images/rabbitmq-entrypoint.sh"),
+                  target: "/run/fv-upgrade-entrypoint",
+                  read_only: true,
+                },
+              ],
+            };
+      await writeFile(
+        overlay,
+        JSON.stringify({ services: { rabbitmq: service } }),
+        { mode: 0o600 },
+      );
+      await exec(
+        "docker",
+        [
+          ...args,
+          "-f",
+          overlay,
+          "up",
+          "-d",
+          "--no-deps",
+          "--no-build",
+          "--pull",
+          minor === 3 ? "never" : "missing",
+          "--wait",
+          "rabbitmq",
+        ],
+        options,
+      );
+    } finally {
+      await rm(temporary, { force: true, recursive: true });
+    }
+  }
   current = await version();
   if (!current.startsWith(`4.${minor}.`))
     throw new Error("broker version postcheck failed");

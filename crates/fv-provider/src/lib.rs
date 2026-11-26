@@ -1,38 +1,138 @@
 use anyhow::{Context, Result, ensure};
-use fv_config::{Architecture, Config};
-use reqwest::{Method, blocking::Client};
+use fv_config::{
+    Architecture, Config, ExistingServer, Provider, ProviderCandidate, ubuntu_image_version,
+};
+use reqwest::{
+    Method,
+    blocking::{Client, ClientBuilder},
+};
 use serde_json::{Value, json};
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 mod project;
 
 const NETWORK_RANGE: &str = "10.91.0.0/16";
 const SUBNET_RANGE: &str = "10.91.1.0/24";
 
+#[derive(Clone, Copy)]
+struct Target<'a> {
+    environment: &'a str,
+    project: &'a str,
+    location: &'a str,
+    server_type: &'a str,
+    architecture: Architecture,
+    image: Option<&'a str>,
+    require_stock_image: bool,
+    root_disk_gb: Option<u64>,
+    existing_server: Option<&'a ExistingServer>,
+    ssh_key_ids: &'a [u64],
+    project_resource_ids: &'a BTreeMap<String, Vec<u64>>,
+}
+
+impl<'a> Target<'a> {
+    fn from_provider<Image>(
+        environment: &'a str,
+        project: &'a str,
+        provider: &'a Provider<Image>,
+        image: Option<&'a str>,
+    ) -> Self {
+        Self {
+            environment,
+            project,
+            location: &provider.location,
+            server_type: &provider.server_type,
+            architecture: provider.architecture,
+            image,
+            require_stock_image: false,
+            root_disk_gb: None,
+            existing_server: provider.existing_server.as_ref(),
+            ssh_key_ids: &provider.ssh_key_ids,
+            project_resource_ids: &provider.project_resource_ids,
+        }
+    }
+}
+
+impl<'a> From<&'a Config> for Target<'a> {
+    fn from(config: &'a Config) -> Self {
+        Self::from_provider(
+            &config.environment,
+            &config.project,
+            &config.provider,
+            Some(&config.provider.image),
+        )
+    }
+}
+
+impl<'a> From<&'a ProviderCandidate> for Target<'a> {
+    fn from(config: &'a ProviderCandidate) -> Self {
+        Self {
+            require_stock_image: true,
+            root_disk_gb: config.root_disk_gb,
+            ..Self::from_provider(
+                &config.environment,
+                &config.project,
+                &config.provider,
+                config.provider.image.as_deref(),
+            )
+        }
+    }
+}
+
 pub struct Hetzner {
     client: Client,
     token: String,
     endpoint: String,
+    storage_endpoint: String,
 }
 
 impl Hetzner {
     pub fn new() -> Result<Self> {
+        let token = std::env::var("FV_HCLOUD_TOKEN")
+            .or_else(|_| std::env::var("HCLOUD_TOKEN"))
+            .context("Founder Village Hetzner project token required")?;
+        Self::with_token(token, Client::builder())
+    }
+
+    pub fn audit_candidate(candidate: &ProviderCandidate) -> Result<Value> {
+        candidate.validate()?;
+        let token = std::env::var("FV_HCLOUD_TOKEN")
+            .context("candidate audit requires a dedicated Founder Village project token")?;
+        ensure!(
+            !token.trim().is_empty(),
+            "candidate audit credential is empty"
+        );
+        Self::with_token(token, Client::builder())?.existing_candidate(candidate)
+    }
+
+    fn with_token(token: String, builder: ClientBuilder) -> Result<Self> {
         Ok(Self {
-            client: Client::builder()
+            client: builder
                 .timeout(Duration::from_secs(30))
                 .redirect(reqwest::redirect::Policy::none())
                 .build()?,
-            token: std::env::var("FV_HCLOUD_TOKEN")
-                .or_else(|_| std::env::var("HCLOUD_TOKEN"))
-                .context("Founder Village Hetzner project token required")?,
+            token,
             endpoint: "https://api.hetzner.cloud/v1".into(),
+            storage_endpoint: "https://api.hetzner.com/v1".into(),
         })
     }
 
     fn call(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
+        self.request(&self.endpoint, method, path, body)
+    }
+
+    fn request(
+        &self,
+        endpoint: &str,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Value> {
         let mut request = self
             .client
-            .request(method, format!("{}/{path}", self.endpoint))
+            .request(method, format!("{endpoint}/{path}"))
             .bearer_auth(&self.token);
         if let Some(body) = body {
             request = request.json(&body);
@@ -343,25 +443,42 @@ fn list<'a>(resource: &'a Value, key: &str) -> Result<&'a [Value]> {
         .context("incomplete Hetzner inventory")?)
 }
 
-fn check_server(c: &Config, server: &Value) -> Result<()> {
+fn check_server<'a>(target: impl Into<Target<'a>>, server: &Value) -> Result<()> {
+    let c = target.into();
     let location = server["location"]["name"]
         .as_str()
         .or_else(|| server["datacenter"]["location"]["name"].as_str());
     ensure!(
         server["name"] == c.project
-            && location == Some(c.provider.location.as_str())
-            && server["server_type"]["name"] == c.provider.server_type
-            && server["server_type"]["architecture"] == hetzner_arch(c.provider.architecture)
-            && server["image"]["name"] == c.provider.image
-            && server["image"]["architecture"] == hetzner_arch(c.provider.architecture),
+            && location == Some(c.location)
+            && server["server_type"]["name"] == c.server_type
+            && server["server_type"]["architecture"] == hetzner_arch(c.architecture)
+            && c.image.is_none_or(|image| server["image"]["name"] == image)
+            && server["image"]["architecture"] == hetzner_arch(c.architecture),
         "server name, location, type, or OS image drift; explicit migration required"
     );
+    if c.require_stock_image {
+        ensure!(
+            server["image"]["type"] == "system",
+            "candidate requires a Hetzner stock image"
+        );
+        let image = server["image"]["name"]
+            .as_str()
+            .context("candidate stock image name is unavailable")?;
+        ubuntu_image_version(image)?;
+    }
+    if let Some(expected) = c.root_disk_gb {
+        ensure!(
+            server["primary_disk_size"].as_u64() == Some(expected),
+            "candidate root disk size mismatch or unavailable"
+        );
+    }
     let owner = &server["labels"]["fv-owner"];
     ensure!(
-        owner.is_null() || owner == &c.project,
+        owner.is_null() || owner == c.project,
         "server belongs to another runtime"
     );
-    if let Some(binding) = &c.provider.existing_server {
+    if let Some(binding) = c.existing_server {
         ensure!(
             server["id"] == binding.id
                 && server["public_net"]["ipv4"]["ip"] == binding.ipv4.to_string(),

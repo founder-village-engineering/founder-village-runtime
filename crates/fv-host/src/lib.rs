@@ -1,4 +1,4 @@
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use fv_config::{Architecture, Config};
 use std::{
     collections::BTreeMap,
@@ -35,9 +35,57 @@ pub fn run(
     timeout: u64,
 ) -> Result<()> {
     ensure!(timeout > 0, "positive operation timeout required");
-    let mut command = Command::new(program);
-    command.args(args).current_dir(root).envs(env);
+    let mut command = if program == "docker" && root.join(".fv-releases").is_dir() {
+        let mut cmd = host_docker();
+        cmd.args(args);
+        cmd
+    } else if program == "node" && root.join(".fv-releases").is_dir() {
+        node_command(root, args)?
+    } else {
+        let mut command = Command::new(program);
+        command.args(args);
+        command
+    };
+    command.current_dir(root).envs(env);
     run_command(&mut command, timeout)
+}
+
+/// On an installed VM every TypeScript entrypoint runs its signed, precompiled JS.
+pub fn node_command(root: &Path, args: &[&str]) -> Result<Command> {
+    if !root.join(".fv-current").is_symlink() {
+        ensure!(
+            !root.join(".fv-releases").is_dir(),
+            "signed host generation is unavailable"
+        );
+        let mut command = Command::new("node");
+        command.args(args);
+        return Ok(command);
+    }
+    let args = args.strip_prefix(&["--import", "tsx"]).unwrap_or(args);
+    let index = args
+        .iter()
+        .position(|s| s.ends_with(".ts"))
+        .context("compiled host entrypoint required")?;
+    let source = args[index].strip_suffix(".ts").unwrap();
+    ensure!(
+        ["scripts/", "services/", "packages/"]
+            .iter()
+            .any(|p| source.starts_with(p))
+            && source
+                .split('/')
+                .all(|p| !p.is_empty() && p != "." && p != ".."),
+        "invalid host entrypoint"
+    );
+    let mut command = Command::new(root.join(".fv-current/node"));
+    command
+        .args(&args[..index])
+        .arg(
+            root.join(".fv-current/dist")
+                .join(format!("{source}.js"))
+                .canonicalize()?,
+        )
+        .args(&args[index + 1..]);
+    Ok(command)
 }
 
 pub fn run_command(command: &mut Command, timeout: u64) -> Result<()> {
@@ -154,31 +202,34 @@ pub fn verify_tunnel_ssh(
     );
     let file = file.replace('\\', "\\\\").replace('"', "\\\"");
     let mut command = Command::new("ssh");
-    command.current_dir(root).args([
-        "-F",
-        "/dev/null",
-        "-T",
-        "-o",
-        "StrictHostKeyChecking=yes",
-        "-o",
-        &format!("UserKnownHostsFile=\"{file}\""),
-        "-o",
-        "GlobalKnownHostsFile=none",
-        "-o",
-        "HostKeyAlgorithms=ssh-ed25519",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ClearAllForwardings=yes",
-        "-o",
-        "IdentitiesOnly=yes",
-        "-o",
-        "ForwardAgent=no",
-        "-o",
-        "ConnectTimeout=15",
-        "-o",
-        "ProxyCommand=cloudflared access ssh --hostname %h",
-    ]);
+    command
+        .current_dir(root)
+        .env_remove("FV_HCLOUD_TOKEN")
+        .args([
+            "-F",
+            "/dev/null",
+            "-T",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            &format!("UserKnownHostsFile=\"{file}\""),
+            "-o",
+            "GlobalKnownHostsFile=none",
+            "-o",
+            "HostKeyAlgorithms=ssh-ed25519",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ClearAllForwardings=yes",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "ForwardAgent=no",
+            "-o",
+            "ConnectTimeout=15",
+            "-o",
+            "ProxyCommand=cloudflared access ssh --hostname %h",
+        ]);
     if let Some(identity) = identity {
         command.arg("-i").arg(identity.canonicalize()?);
     }
@@ -188,8 +239,23 @@ pub fn verify_tunnel_ssh(
     })
 }
 
+pub fn host_docker() -> Command {
+    let mut docker = Command::new("/usr/bin/docker");
+    docker
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("DOCKER_HOST", "unix:///var/run/docker.sock");
+    docker
+}
+pub fn docker(root: &Path) -> Command {
+    if root.join(".fv-releases").is_dir() {
+        host_docker()
+    } else {
+        Command::new("docker")
+    }
+}
 pub fn docker_architecture() -> Result<Architecture> {
-    let result = Command::new("docker")
+    let result = host_docker()
         .args(["info", "--format", "{{.OSType}}/{{.Architecture}}"])
         .output()?;
     ensure!(result.status.success(), "Docker daemon unavailable");
@@ -198,129 +264,6 @@ pub fn docker_architecture() -> Result<Architecture> {
         .strip_prefix("linux/")
         .ok_or_else(|| anyhow::anyhow!("Linux Docker daemon required"))?;
     Architecture::from_machine(machine)
-}
-
-pub fn install_tools(root: &Path) -> Result<()> {
-    ensure!(std::env::consts::OS == "linux", "Linux host required");
-    let lock: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(root.join("config/tools.lock.json"))?)?;
-    let arch = match std::env::consts::ARCH {
-        "aarch64" => "arm64",
-        "x86_64" => "x64",
-        _ => anyhow::bail!("unsupported host architecture"),
-    };
-    let version = lock["node"]["version"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("missing Node version"))?;
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()?;
-    if !Path::new("/usr/bin/xz").exists() {
-        run("apt-get", &["update", "-qq"], root, &BTreeMap::new(), 120)?;
-        run(
-            "apt-get",
-            &["install", "-y", "--no-install-recommends", "xz-utils"],
-            root,
-            &BTreeMap::new(),
-            120,
-        )?;
-    }
-    let dir = root.join(".state/downloads");
-    std::fs::create_dir_all(&dir)?;
-    for (url, expected, file, executable) in [
-        (
-            format!("https://nodejs.org/dist/v{version}/node-v{version}-linux-{arch}.tar.xz"),
-            lock["node"][format!("linux-{arch}")].as_str().unwrap_or(""),
-            "node.tar.xz",
-            false,
-        ),
-        (
-            format!(
-                "https://github.com/sigstore/cosign/releases/download/v{}/cosign-linux-{}",
-                lock["cosign"]["version"].as_str().unwrap_or(""),
-                if arch == "x64" { "amd64" } else { "arm64" }
-            ),
-            lock["cosign"][format!("linux-{}", if arch == "x64" { "amd64" } else { "arm64" })]
-                .as_str()
-                .unwrap_or(""),
-            "cosign",
-            true,
-        ),
-    ] {
-        ensure!(expected.len() == 64, "tool digest required");
-        let path = dir.join(file);
-        if !tool_matches(&path, expected)? {
-            let response = client.get(url).send()?;
-            ensure!(response.status().is_success(), "tool download failed");
-            download_tool(response, &path, expected)?;
-        }
-        if executable {
-            run(
-                "install",
-                &["-m", "755", path.to_str().unwrap(), "/usr/local/bin/cosign"],
-                root,
-                &BTreeMap::new(),
-                30,
-            )?;
-        } else {
-            run(
-                "tar",
-                &[
-                    "-xJf",
-                    path.to_str().unwrap(),
-                    "--strip-components=1",
-                    "-C",
-                    "/usr/local",
-                ],
-                root,
-                &BTreeMap::new(),
-                60,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn tool_matches(path: &Path, expected: &str) -> Result<bool> {
-    if !path.symlink_metadata().is_ok_and(|meta| meta.is_file()) {
-        return Ok(false);
-    }
-    let checksum = Command::new("sha256sum").arg("--").arg(path).output()?;
-    Ok(checksum.status.success()
-        && std::str::from_utf8(&checksum.stdout)?
-            .split_whitespace()
-            .next()
-            == Some(expected))
-}
-
-fn download_tool(response: reqwest::blocking::Response, path: &Path, expected: &str) -> Result<()> {
-    use std::io::Read;
-    // Current Cosign builds exceed 128 MiB. Stream to disk on small VPSes.
-    const LIMIT: u64 = 256 * 1024 * 1024;
-    let temporary = path.with_extension(format!("download-{}", fv_config::random_secret()));
-    let result = (|| -> Result<()> {
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&temporary)?;
-        let length = std::io::copy(&mut response.take(LIMIT + 1), &mut file)?;
-        ensure!(length <= LIMIT, "tool download exceeds size limit");
-        file.sync_all()?;
-        ensure!(
-            tool_matches(&temporary, expected)?,
-            "tool checksum mismatch"
-        );
-        std::fs::rename(&temporary, path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(temporary);
-    }
-    result
 }
 
 pub fn assert_owned_host(c: &Config) -> Result<()> {
@@ -337,7 +280,7 @@ pub fn assert_owned_host(c: &Config) -> Result<()> {
         );
     } else {
         for args in [vec!["ps", "-aq"], vec!["volume", "ls", "-q"]] {
-            match Command::new("docker").args(args).output() {
+            match host_docker().args(args).output() {
                 Ok(result) => {
                     ensure!(
                         result.status.success(),

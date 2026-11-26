@@ -7,11 +7,7 @@
   "cf": {
     "version": "1.0.0-rc.0",
     "source": "npm:cf",
-    "integrity": "package-lock.json"
-  },
-  "cosign": {
-    "version": "2.6.1",
-    "linux-amd64": "064954c5d8c7e3b28188eee5b1727b31c411550bc5fefd41aa672d3c761d103a",
-    "linux-arm64": "56a16480bdd56ec789abaa65924402f6b92c0041f06885995853c05567b76f34"
+    "integrity": "package-lock.json",
+    "launcherSha256": "48b44ab41bc56054f64db01fdbb6f46b91bed9cb065edee229d8732ed8ef0d9d"
   }
 }

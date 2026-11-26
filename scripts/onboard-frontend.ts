@@ -15,6 +15,7 @@ import {
   frontendOrigins,
   frontendSchema,
   frontends,
+  pagesProjectFields,
   registeredOrigin,
   usesOneAliasFormat,
 } from "../packages/frontends/index.ts";
@@ -31,8 +32,7 @@ const manifestSchema = z
     owner: z.string().min(1).max(100),
     description: z.string().min(1).max(240),
     application: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
-    pagesProject: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
-    productionOrigin: z.string().url(),
+    ...pagesProjectFields,
     ...customOriginFields,
     runtimeApiOrigin: z
       .url({ protocol: /^https$/ })
@@ -142,6 +142,9 @@ async function desired(manifestPath: string, frontendsRoot: string) {
     application: manifest.application,
     pagesProject: manifest.pagesProject,
     productionOrigin: manifest.productionOrigin,
+    ...(manifest.additionalPagesProjects
+      ? { additionalPagesProjects: manifest.additionalPagesProjects }
+      : {}),
     ...(manifest.customOrigin ? { customOrigin: manifest.customOrigin } : {}),
     ...(manifest.customOrigins
       ? { customOrigins: manifest.customOrigins }

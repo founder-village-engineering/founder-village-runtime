@@ -21,7 +21,9 @@ const exec = promisify(execFile),
   identity = process.argv[4] ?? "";
 await exec(
   process.execPath,
-  ["--import", "tsx", "scripts/verify-recovery.ts", bundle],
+  import.meta.url.endsWith(".js")
+    ? ["dist/scripts/verify-recovery.js", bundle]
+    : ["--import", "tsx", "scripts/verify-recovery.ts", bundle],
   { timeout: 30000 },
 );
 const envelope = JSON.parse(

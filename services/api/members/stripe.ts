@@ -1,7 +1,11 @@
 import Stripe from "stripe";
 import { z } from "zod";
 import { denied } from "../../../packages/auth/index.ts";
-import { frontends, originAllowed } from "../../../packages/frontends/index.ts";
+import {
+  frontends,
+  originAllowed,
+  productionOrigins,
+} from "../../../packages/frontends/index.ts";
 import { applicationId } from "../../../packages/frontend-contracts/founder-village-app/index.ts";
 import { checkoutActionSchema } from "../../../packages/frontend-contracts/founder-village-app/members.ts";
 import type { Order } from "./store.ts";
@@ -90,8 +94,7 @@ export class StripePayments {
     const allowed = frontends.some((frontend) =>
       process.env.FV_ENV === "local"
         ? frontend.localOrigins.includes(origin)
-        : frontend.productionOrigin === origin ||
-          frontend.customOrigin === origin,
+        : productionOrigins(frontend).includes(origin),
     );
     return allowed ? origin : undefined;
   }

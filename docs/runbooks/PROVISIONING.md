@@ -10,9 +10,11 @@
 
 ## 1. Bind the existing VM and its network
 
+For unattended production, the runner performs the following steps from a verified provider binding. Use the production entrypoint to discover the VM, generate the private manifest and keys, and resume through the Tunnel after lockdown. [Unattended production bootstrap](PRODUCTION.md#unattended-production-bootstrap)
+
 On the operator workstation, copy the environment's example to `config/<environment>.private.json` with mode 0600. Set `project` to the exact server name in the Hetzner project. For a VM created in the Hetzner Console, add `provider.existing_server` with its numeric `id` and assigned `ipv4` from that console. Keep the address and ID in this private manifest. The example's loopback SSH CIDR is a placeholder. Set a temporary allowlist for the operator's actual public IPv4 `/32` or IPv6 `/128`.
 
-Complete the Cloudflare account, zone, team and exact managed API, admin, and SSH names, OIDC endpoints and named root actors, backup endpoint, and independently verified immutable storage settings. The example enables Tunnel-based operator SSH through `cloudflare.ssh_domain`. Use a distinct one-label hostname such as `ssh-dev.example.com` for staging. The admin Access audience is filled by the Cloudflare bootstrap. With `npm ci` installed on the workstation, use `node node_modules/cf/bin/cf auth whoami --json` in a private terminal to confirm the intended Cloudflare account. Use that account's ID and zone in the private manifest. Pin the launcher hash using `shasum -a 256 node_modules/cf/bin/cf`. The example points to that launcher under the VM's fixed install path.
+Complete the Cloudflare account, zone, team and exact managed API, admin, and SSH names, OIDC endpoints and named root actors, backup endpoint, and independently verified immutable storage settings. The example enables Tunnel-based operator SSH through `cloudflare.ssh_domain`. Use a distinct one-label hostname such as `ssh-dev.example.com` for staging. The admin Access audience is filled by the Cloudflare bootstrap. With `npm ci` installed on the workstation, use `cf_project foundervillage status` in a workstation shell to confirm the signed-in account and active zone. Use that account's ID and zone in the private manifest. Pin the launcher hash using `shasum -a 256 node_modules/cf/bin/cf`. The example points to that launcher under the VM's fixed install path.
 
 ```sh
 manifest=config/staging.private.json
@@ -24,9 +26,9 @@ bin/fv --config "$manifest" provision apply
 bin/fv --config "$manifest" provision status
 ```
 
-Supply a token issued inside the dedicated Founder Village project as `FV_HCLOUD_TOKEN` through the workstation secret store. Existing callers may supply `HCLOUD_TOKEN`; both paths undergo identical project checks. Use read-only credentials for audit and status. The audit uses the same Cloud API inventory checks that run before apply can write. It prints counts by resource class. Correctly scoped credentials must see the bound server and its declared keys, and must fail to see resources pinned to an independent project. [Hetzner project-scoped API tokens](https://docs.hetzner.com/cloud/api/getting-started/using-api/)
+Supply a token issued inside the dedicated Founder Village project as `FV_HCLOUD_TOKEN` through the workstation secret store. Existing callers may supply `HCLOUD_TOKEN` and undergo the same project checks. Use read-only credentials for audit and status. The audit uses the same project inventory checks that run before apply can write. It prints counts by resource class. Correctly scoped credentials must see the bound server and its declared keys, and must fail to see resources pinned to an independent project. [Hetzner project-scoped API tokens](https://docs.hetzner.com/cloud/api/getting-started/using-api/)
 
-The audit reads all pages of servers, registered SSH keys, firewalls, networks, primary and floating IPs, volumes, load balancers, placement groups, certificates, DNS zones, backups and snapshots. It recognizes the bound VM, its assigned IPs and volumes, images attributable to admitted servers, and the managed firewall and network. Declare any additional approved project resource by API collection name and numeric ID in the private `provider.project_resource_ids` object. For example, standalone snapshot IDs go under `snapshots`. Review the resource owner in the provider console before adding a binding. Keep the private manifest and IDs out of version control. Independent storage credentials and object-store access require their own checks.
+The audit reads all pages of servers, registered SSH keys, firewalls, networks, primary and floating IPs, volumes, load balancers, placement groups, certificates, DNS zones, backups, snapshots and Storage Boxes. It recognizes the bound VM, its assigned IPs and volumes, images attributable to admitted servers, and the managed firewall and network. Declare any additional approved project resource by API collection name and numeric ID in the private `provider.project_resource_ids` object. For example, standalone snapshot IDs go under `snapshots`. Review the resource owner in the provider console before adding a binding. Keep the private manifest and IDs out of version control. The provisioner enumerates Storage Boxes through the separate Hetzner API using the same project token. Bind each box by its provider ID under `storage_boxes`, including an unused box. A missing, inaccessible or unexpected box stops provisioning. Bucket policies, data-plane credentials and restore access require separate checks. [Hetzner API endpoints](https://docs.hetzner.cloud/)
 
 The bound path checks the server ID, name, IPv4, location, type, OS image, CPU architecture, ownership and attachments. It rejects foreign or selector-based firewall attachments, verifies the managed network, reads back the applied state, and enables delete and rebuild protection. A project containing another tenant must be separated by its owner before applying. Preserve independent console or authenticated private SSH access during a transfer. In Tunnel SSH mode the initial firewall allows the temporary SSH source CIDRs. The final firewall has zero public inbound rules for IPv4 and IPv6. [Hetzner project transfers](https://docs.hetzner.com/cloud/general/faq/) · [Cloud firewall behavior](https://docs.hetzner.com/cloud/firewalls/faq/)
 
@@ -36,13 +38,13 @@ For a **new allocation**, omit `existing_server`, configure `provider.ssh_key_id
 
 Read the host's Ed25519 public key in the Hetzner Console using `cat /etc/ssh/ssh_host_ed25519_key.pub`. Put the verified address and key in a dedicated private `known_hosts` file. Keep the provider console open until operator SSH and sudo have been verified.
 
-Download `fv-linux-arm64-<source-sha>` from the successful tag workflow. Use `fv-linux-amd64-<source-sha>` for an x86 VM. Copy [the bootstrap example](../../config/bootstrap.example.json) to a mode-0600 `config/bootstrap.private.json` and set its protected paths. Run from a trusted checkout on the workstation with the locked npm dependencies and Cosign installed.
+Build the signed bundle on the operator workstation for the architecture in the private provider manifest. The CX23 uses Linux AMD64. Copy the bootstrap example to mode-0600 `config/bootstrap.private.json`. Set `releaseDirectory`, the independent `allowedSigners` file, the manifest and the SSH paths. [Workstation build and signing](DEPLOYMENT.md) · [Bootstrap example](../../config/bootstrap.example.json)
 
 ```sh
 node --import tsx scripts/remote-bootstrap.ts config/bootstrap.private.json
 ```
 
-`initialRootPublicKey` applies only to an existing VM with initial root key access. The tool uses the console-pinned host key, binds that session to the configured existing IPv4, and proves a separate `fv` session works before disabling root SSH. Omit the field for cloud-init-created VMs and later updates. Keep the operator key on the workstation. The script verifies the signed source archive, manifest, and native ELF before upload. It rechecks the bytes on the VM, installs a root-owned tree under `/opt/founder-village`, and configures updates, Docker logging and packet filtering, and systemd. Host tools use the locked TypeScript dependencies and checksum-pinned Node and Cosign. The tagged workflow builds the application image off-host.
+`initialRootPublicKey` applies only to an existing VM with initial root key access. The tool uses the console-pinned host key, binds that session to the configured existing IPv4, and proves a separate `fv` session works before disabling root SSH. Omit the field for cloud-init-created VMs and later updates. Keep the operator key on the workstation. The Mac and VM independently verify the signed manifest and artifacts. The root-owned installation under `/opt/founder-village` contains a precompiled Linux CLI, Node, compiled host scripts, dependencies, and a platform-specific image archive. Docker on the VM imports these images and runs the services.
 
 ## 3. Initialize private services
 
@@ -60,13 +62,23 @@ For an older deployment using WireGuard, follow the [WireGuard enrollment proced
 
 ## 4. Configure Access and promote before opening ingress
 
-From the host, use a temporary mode-0600 env file supplying `CLOUDFLARE_PROVISION_TOKEN`, `ACCESS_ADMIN_EMAILS`, `ACCESS_SSH_EMAILS`, and a protected `CF_WORK_DIR`. SSH operators receive host authority, so supply their exact email allowlist separately from the browser admins. The script uses the checksum-pinned `cf` CLI with the manifest's account and zone. Use an account-scoped token for Tunnel and Access and the restricted DNS token from the runtime catalog. The script reads back the routes, proxied tunnel CNAMEs, and both named MFA policies. For a bound VM it also checks zone records for its configured IPv4. Admin and SSH routes validate their own Access audiences. The admin application independently verifies Access and its OIDC assurance requirements. [Cloudflare Tunnel origin parameters](https://developers.cloudflare.com/tunnel/reference/origin-parameters/)
+Scope `CF_READ_TOKEN` to the Founder Village zone and grant it access to zone details. On apply and verify, the provisioner checks the returned zone ID, name, active status and owning account before it uses Tunnel, Access or DNS. It repeats the ownership check before changes. [Cloudflare zone details](https://developers.cloudflare.com/api/resources/zones/methods/get/)
+
+On the workstation, supply the exact, separately approved browser and SSH administrator allowlists in a protected file. Select the Founder Village profile. Its default read-only login supports account and DNS inspection. Tunnel or Access reconciliation requires a login with the permissions for the requested operation. The provisioner rechecks the active zone, account, routes, proxied CNAMEs and MFA policies. The signed-in CLI session stays on the workstation. A protected workstation invocation may also select separate read, write, and provisioning tokens using `FV_CLOUDFLARE_WORKSTATION=1`. [Cloudflare Tunnel origin parameters](https://developers.cloudflare.com/tunnel/reference/origin-parameters/)
 
 ```sh
-sudo /usr/local/bin/node --env-file=.state/staging.env --env-file=/protected/cloudflare-bootstrap.env --import tsx scripts/cloudflare-bootstrap.ts "$manifest" plan
-sudo /usr/local/bin/node --env-file=.state/staging.env --env-file=/protected/cloudflare-bootstrap.env --import tsx scripts/cloudflare-bootstrap.ts "$manifest" apply
+manifest=config/production.private.json
+cf_project foundervillage exec -- node --env-file=/protected/fv-cloudflare.env --import tsx scripts/cloudflare-bootstrap.ts "$manifest" plan
+cf_project foundervillage exec -- node --env-file=/protected/fv-cloudflare.env --import tsx scripts/cloudflare-bootstrap.ts "$manifest" apply
+```
+
+Apply writes the Access audience to the private manifest and a mode-0600 connector token to `.state/operator/cloudflare/<environment>/connector.token` (relative to `CF_WORK_DIR` when overridden). Put only that connector credential in the approved host catalog as `CLOUDFLARE_TUNNEL_TOKEN`. Transfer the updated private manifest through the pinned bootstrap procedure. In the verified operator session run the following commands against the selected environment.
+
+```sh
+cd /opt/founder-village
+manifest=config/production.private.json
 sudo bin/fv --config "$manifest" render
-sudo /usr/local/bin/node --import tsx scripts/materialize-service-env.ts staging
+sudo ./.fv-current/node "$(realpath dist/scripts/materialize-service-env.js)" production
 sudo bin/fv --config "$manifest" backup capture
 sudo bin/fv --config "$manifest" backup verify
 sudo bin/fv --config "$manifest" backup restore-drill
@@ -74,7 +86,7 @@ sudo bin/fv --config "$manifest" backup restore-drill
 
 Substitute the chosen environment consistently in paths and arguments. Bootstrap the named administrator with `fv admin-grant` and explicit actions and applications. Use the IdP's exact signed assurance value for `OIDC_MFA_ACR` and verify phishing-resistant MFA, revocation, and step-up using the [administrator security runbook](ADMIN_SECURITY.md).
 
-Follow [release promotion](DEPLOYMENT.md) using the signed manifest revision and exact image digest from the downloaded artifact. After `fv doctor` passes, enable the runtime units and open ingress.
+Follow [release promotion](DEPLOYMENT.md) using the signed manifest revision and image identities from the workstation bundle. After `fv doctor` passes, enable the runtime units and open ingress.
 
 ```sh
 sudo systemctl enable fv-runtime.service
@@ -85,7 +97,7 @@ sudo systemctl enable --now fv-ingress.service
 
 On an existing runtime, restart `fv-domain-worker.service` to load the tunnel DNS restrictions. Restart `fv-ingress.service` from the provider console or a verified bootstrap session to attach the dedicated SSH bridge.
 
-Run the same Cloudflare bootstrap command with `verify` after the connector starts. It reads the deployed configuration, DNS, and connector status using `cf`. Use a scoped read token for verification where available. Revoke the temporary provisioning token and remove its protected file after verification. Audit other zones and the assigned IPv6 range for historical origin records before treating the address as private. [Protect your origin server](https://developers.cloudflare.com/fundamentals/security/protect-your-origin-server/)
+From the workstation, run the same Cloudflare bootstrap command with `verify` after the connector starts. It reads the deployed configuration, DNS, and connector status using `cf`. Use a scoped read token for verification where available. Revoke the temporary provisioning token and remove its protected file after verification. Audit other zones and the assigned IPv6 range for historical origin records before treating the address as private. [Protect your origin server](https://developers.cloudflare.com/fundamentals/security/protect-your-origin-server/)
 
 ## 5. Close public inbound access
 
@@ -121,4 +133,4 @@ Require `firewall_rules_match: true` and `public_inbound_closed: true`. Confirm 
 | Alerts | `ALERT_WEBHOOK_URL` for an independent HTTPS receiver. |
 | Members payments | `MEMBERS_*` credentials are scoped to the API service. |
 
-Use one private catalog per environment. Test actual storage retention locks, deletion denial, encryption, signed uploads, and recovery credentials. Host installation checks for 8 GiB of free space under `/opt`. Monitor headroom on the 40 GB VM for upgrades, both application colors, PostgreSQL WAL, and temporary backup transfers. Preserve all runtime volumes and usable recovery points during capacity work.
+Use one private catalog per environment. Test actual storage retention locks, deletion denial, encryption, signed uploads, and recovery credentials. The installer checks available space against the actual artifact and unpacked file sizes before staging the generation. Monitor headroom on the 40 GB VM for upgrades, both application colors, PostgreSQL WAL, and temporary backup transfers. Preserve all runtime volumes and usable recovery points during capacity work.

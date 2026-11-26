@@ -14,6 +14,7 @@
     "application": "founder-village-app",
     "pagesProject": "founder-village-app",
     "productionOrigin": "https://founder-village-app.pages.dev",
+    "additionalPagesProjects": ["founder-village-apps"],
     "customOrigins": ["https://founderhaus.org", "https://foundervillage.org"],
     "localOrigins": ["https://app.fv", "http://127.0.0.1:43913"],
     "frontendPath": "apps/founder-village-app",

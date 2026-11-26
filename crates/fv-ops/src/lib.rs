@@ -4,6 +4,7 @@ pub mod local_edge;
 pub mod render;
 pub mod runner;
 pub mod wireguard;
+pub mod workstation;
 use anyhow::{Result, ensure};
 use fs2::FileExt;
 use fv_config::Config;
@@ -29,7 +30,11 @@ pub fn compose_command(root: &Path, c: &Config, args: &[&str]) -> std::process::
         a.extend(["-f", &overlay]);
     }
     a.extend(args);
-    let mut command = std::process::Command::new("docker");
+    let mut command = if c.environment == "local" {
+        std::process::Command::new("docker")
+    } else {
+        fv_host::host_docker()
+    };
     command.args(a).current_dir(root);
     if c.environment != "local" {
         command.env(

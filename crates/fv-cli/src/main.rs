@@ -53,6 +53,19 @@ enum Cmd {
     },
     BrokerUpgrade,
     QueueUpgrade,
+    /// Audit the private provider binding for an existing remote VM.
+    CandidateAudit,
+    #[command(hide = true)]
+    BundleExtract {
+        directory: PathBuf,
+        destination: PathBuf,
+        architecture: String,
+    },
+    #[command(hide = true)]
+    BundleCheck {
+        generation: PathBuf,
+        architecture: String,
+    },
     Provision {
         #[arg(value_parser=["plan","apply","status","audit"])]
         action: String,
@@ -65,11 +78,11 @@ enum Cmd {
         tunnel_identity: Option<PathBuf>,
     },
     Host {
-        #[arg(value_parser=["plan","apply"])]
+        #[arg(value_parser=["plan","apply","install-catalog","escrow-backup-verifier","seal-ssh"])]
         action: String,
     },
     Release {
-        #[arg(value_parser=["prepare","deploy","promote","rollback","verify"])]
+        #[arg(value_parser=["prepare","deploy","stage","promote","rollback","verify"])]
         action: String,
         #[arg(long)]
         revision: Option<String>,
@@ -118,8 +131,42 @@ fn main() {
 fn execute() -> Result<()> {
     let a = Args::parse();
     let root = a.root.canonicalize()?;
+    if let Cmd::BundleExtract {
+        directory,
+        destination,
+        architecture,
+    } = &a.command
+    {
+        let arch = fv_config::Architecture::from_machine(architecture)?;
+        return fv_ops::workstation::extract(
+            &directory.canonicalize()?,
+            &destination.canonicalize()?,
+            arch,
+        );
+    }
+    if let Cmd::BundleCheck {
+        generation,
+        architecture,
+    } = &a.command
+    {
+        let m = fv_ops::workstation::Manifest::read(
+            &generation.join(".bundle"),
+            std::path::Path::new(fv_ops::workstation::SIGNERS),
+            fv_config::Architecture::from_machine(architecture)?,
+        )?;
+        m.verify_archive(generation)?;
+        return m.verify_source(generation);
+    }
     if let Cmd::Start { action, list } = a.command {
         return start::run(&root, &a.config, action, list);
+    }
+    if matches!(a.command, Cmd::CandidateAudit) {
+        let candidate = fv_config::load_provider_candidate(&root.join(&a.config))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&fv_provider::Hetzner::audit_candidate(&candidate)?)?
+        );
+        return Ok(());
     }
     let c = fv_config::load(&root.join(&a.config))?;
     if matches!(a.command, Cmd::Validate) {
@@ -161,7 +208,9 @@ fn execute() -> Result<()> {
             "host-install" => fv_ops::local_edge::host_install(&root, &c)?,
             _ => fv_ops::local_edge::down(&root, &c)?,
         },
+        Cmd::BundleExtract { .. } | Cmd::BundleCheck { .. } => unreachable!(),
         Cmd::Validate => {}
+        Cmd::CandidateAudit => unreachable!("candidate audit uses a provider-only manifest"),
         Cmd::Init => {
             fv_ops::render::init(&root, &c)?;
             println!("private runtime configuration initialized");
@@ -228,6 +277,8 @@ fn execute() -> Result<()> {
                         "-d",
                         "--no-deps",
                         "--no-build",
+                        "--pull",
+                        "never",
                         "cloudflared",
                     ],
                 )?;
@@ -241,13 +292,19 @@ fn execute() -> Result<()> {
             &fv_ops::env(&root, &c)?,
             120,
         )?,
-        Cmd::BrokerUpgrade => fv_host::run(
-            "node",
-            &["--import", "tsx", "scripts/broker-upgrade.ts"],
-            &root,
-            &fv_ops::env(&root, &c)?,
-            1200,
-        )?,
+        Cmd::BrokerUpgrade => {
+            if c.environment != "local" {
+                fv_ops::workstation::Manifest::installed(&root, c.provider.architecture)?
+                    .load_images(&root)?;
+            }
+            fv_host::run(
+                "node",
+                &["--import", "tsx", "scripts/broker-upgrade.ts"],
+                &root,
+                &fv_ops::env(&root, &c)?,
+                1200,
+            )?;
+        }
         Cmd::Doctor => {
             fv_ops::validate_images(&root)?;
             fv_ops::compose(&root, &c, &["ps", "--format", "json"])?;
@@ -325,7 +382,29 @@ fn execute() -> Result<()> {
             } else {
                 fv_host::assert_platform(&c)?;
                 fv_host::assert_owned_host(&c)?;
-                fv_host::install_tools(&root)?;
+                if action == "install-catalog" {
+                    return fv_ops::render::install_catalog(&root, &c, std::io::stdin().lock());
+                }
+                if action == "escrow-backup-verifier" {
+                    return fv_ops::backup::escrow_verifier(&root, &c);
+                }
+                let installed =
+                    fv_ops::workstation::Manifest::installed(&root, c.provider.architecture)?;
+                installed.verify_source(&root.join(".fv-current"))?;
+                if action == "seal-ssh" {
+                    ensure!(c.cloudflare.ssh_domain.is_some(), "Tunnel SSH required");
+                    let active = root
+                        .join(".state/private-config")
+                        .join(format!("{}.private.json", c.environment));
+                    ensure!(
+                        active.canonicalize()? == root.join(&a.config).canonicalize()?,
+                        "use the active installed configuration"
+                    );
+                    let mut sealed = c.clone();
+                    sealed.ssh_cidrs.clear();
+                    sealed.validate()?;
+                    private_write(&active, &serde_json::to_vec_pretty(&sealed)?)?;
+                }
                 let mut env = BTreeMap::new();
                 env.insert("FV_ROOT".into(), root.to_string_lossy().into_owned());
                 env.insert(
@@ -347,7 +426,12 @@ fn execute() -> Result<()> {
                         fv_config::TUNNEL_SSH_GATEWAY.into(),
                     );
                 }
+                if action == "seal-ssh" {
+                    let firewall = root.join("infra/templates/ssh-firewall.sh");
+                    return fv_host::run("bash", &[firewall.to_str().unwrap()], &root, &env, 90);
+                }
                 fv_host::run("bash", &[script.to_str().unwrap()], &root, &env, 900)?;
+                installed.load_images(&root)?;
             }
         }
         Cmd::Release {
@@ -366,6 +450,15 @@ fn execute() -> Result<()> {
                 )?
             ),
             "deploy" => fv_ops::deploy::deploy(&root, &c, &id.context("--id required")?)?,
+            "stage" => {
+                fv_host::assert_platform(&c)?;
+                fv_host::assert_owned_host(&c)?;
+                let rev = revision.context("--revision required")?;
+                let manifest =
+                    fv_ops::workstation::Manifest::retained(&root, &rev, c.provider.architecture)?;
+                manifest.verify_source(&root.join(".fv-releases").join(&rev))?;
+                manifest.load_images(&root)?;
+            }
             "promote" => {
                 ensure!(
                     image.is_none() && id.is_none(),
@@ -376,6 +469,15 @@ fn execute() -> Result<()> {
                 println!("Promoted installed signed runtime {revision}");
             }
             "rollback" => fv_ops::deploy::rollback(&root, &c)?,
+            _ if c.environment != "local" => {
+                let manifest =
+                    fv_ops::workstation::Manifest::installed(&root, c.provider.architecture)?;
+                manifest.verify_source(&root.join(".fv-current"))?;
+                manifest.verify_images(&root)?;
+                manifest.verify_archive(&root.join(".fv-current"))?;
+                fv_ops::deploy::check_serving(&root, &c)?;
+                fv_ops::backup::verify(&root, &c)?;
+            }
             _ => {
                 drop(_lock);
                 fv_host::run(

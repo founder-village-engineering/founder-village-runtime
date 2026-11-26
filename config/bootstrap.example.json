@@ -4,10 +4,6 @@
   "identityFile": "/private/fv/operator-key",
   "initialRootPublicKey": "/private/fv/operator-key.pub",
   "config": "config/staging.private.json",
-  "source": "/private/fv/release/source.tar",
-  "sourceBundle": "/private/fv/release/source.sigstore.json",
-  "binary": "/private/fv/release/fv",
-  "binaryBundle": "/private/fv/release/fv.sigstore.json",
-  "manifest": "/private/fv/release/source-manifest.json",
-  "manifestBundle": "/private/fv/release/source-manifest.sigstore.json"
+  "allowedSigners": "/private/fv/trust/allowed_signers",
+  "releaseDirectory": "/private/fv/release"
 }

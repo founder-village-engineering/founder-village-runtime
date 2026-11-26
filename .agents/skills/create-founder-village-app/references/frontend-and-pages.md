@@ -19,10 +19,12 @@ The release path is:
 3. write real public runtime/OIDC configuration for production;
 4. reject symlinks, oversized files, Worker/Functions output, and missing app markers;
 5. hash the exact static artifact set;
-6. explicitly provision the Pages project when requested;
-7. deploy with `wrangler pages deploy`;
+6. provision the manifest's Pages projects when requested;
+7. upload the same built files to each project with `wrangler pages deploy`;
 8. verify the exact Pages and custom host responses and security headers.
 
 Keep provisioning separate from deployment so a typo cannot silently create a similarly named project. Use `npm run pages -- <operation> --app <slug>` or the manual GitHub workflow; do not add per-app shell release scripts.
 
 For an app with approved aliases, set the same `customOrigin` or `customOrigins` on the app manifest and runtime registration. The legacy singular field accepts one HTTPS label below `foundervillage.xyz`. The array also accepts `https://founderhaus.org` and `https://foundervillage.org`. Register each callback and token origin, associate each hostname with the Pages project, and verify DNS and HTTPS on every origin. The primary app's `runtimeApiOrigin` must match the codified production profile.
+
+For additional `pages.dev` origins, list the exact project names in `additionalPagesProjects` in both the manifest and runtime registration. Cloudflare assigns the hostname for each project. Custom domains attach to the primary project.

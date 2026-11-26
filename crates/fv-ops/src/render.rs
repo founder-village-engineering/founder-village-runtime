@@ -3,6 +3,98 @@ use fv_config::{Config, private_write, random_secret};
 use serde_json::json;
 use std::{collections::BTreeMap, fs, path::Path};
 
+/// Merge only the runtime grants carried by the production workstation over
+/// pinned SSH. Provider provisioning credentials and private keys stay off-host.
+pub fn install_catalog(root: &Path, c: &Config, input: impl std::io::Read) -> Result<()> {
+    use std::io::Read;
+    use std::os::unix::fs::MetadataExt;
+    const NAMES: &[&str] = &[
+        "CF_READ_TOKEN",
+        "CF_WRITE_TOKEN",
+        "CLOUDFLARE_TUNNEL_TOKEN",
+        "OIDC_MFA_ACR",
+        "BACKUP_S3_ENDPOINT",
+        "BACKUP_S3_REGION",
+        "BACKUP_S3_BUCKET",
+        "BACKUP_S3_KEY",
+        "BACKUP_S3_SECRET",
+        "IMMUTABLE_ENDPOINT",
+        "IMMUTABLE_REGION",
+        "IMMUTABLE_BUCKET",
+        "IMMUTABLE_ACCESS_KEY",
+        "IMMUTABLE_SECRET_KEY",
+        "AUDIT_ENDPOINT",
+        "AUDIT_REGION",
+        "AUDIT_BUCKET",
+        "AUDIT_ACCESS_KEY",
+        "AUDIT_SECRET_KEY",
+        "OBJECT_ENDPOINT",
+        "OBJECT_REGION",
+        "OBJECT_BUCKET",
+        "OBJECT_ACCESS_KEY",
+        "OBJECT_SECRET_KEY",
+        "AGE_RECIPIENT",
+        "AUDIT_HMAC_KEY",
+        "TEAM_CONTENT_KEY",
+        "TEAM_XAI_MODEL",
+        "TEAM_XAI_API_KEY",
+        "ALERT_WEBHOOK_URL",
+    ];
+    ensure!(c.environment == "production", "production catalog required");
+    let mut bytes = Vec::new();
+    input.take(131_073).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() <= 131_072, "catalog too large");
+    let entries: BTreeMap<String, String> =
+        serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("invalid private catalog"))?;
+    ensure!(
+        !entries.is_empty()
+            && entries
+                .iter()
+                .all(|(key, value)| NAMES.contains(&key.as_str())
+                    && !value.is_empty()
+                    && !value.chars().any(char::is_control)),
+        "invalid runtime catalog entries"
+    );
+    let file = root.join("secrets/production.env");
+    let mut current = match file.symlink_metadata() {
+        Ok(meta) => {
+            ensure!(
+                meta.is_file() && meta.uid() == 0 && meta.mode() & 0o077 == 0,
+                "unsafe installed catalog"
+            );
+            fv_config::env_read(&file)?
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+        Err(e) => return Err(e.into()),
+    };
+    let runtime = root.join(".state/production.env");
+    let active = if runtime.exists() {
+        fv_config::env_read(&runtime)?
+    } else {
+        BTreeMap::new()
+    };
+    for key in ["TEAM_CONTENT_KEY", "AUDIT_HMAC_KEY", "AGE_RECIPIENT"] {
+        if let Some(new) = entries.get(key) {
+            ensure!(
+                [current.get(key), active.get(key)]
+                    .into_iter()
+                    .flatten()
+                    .all(|old| old == new),
+                "existing application or recovery identity requires explicit rotation"
+            );
+        }
+    }
+    current.extend(entries);
+    private_write(
+        &file,
+        current
+            .iter()
+            .map(|(k, v)| format!("{k}={v}\n"))
+            .collect::<String>()
+            .as_bytes(),
+    )
+}
+
 pub fn init(root: &Path, c: &Config) -> Result<()> {
     let file = root.join(format!(".state/{}.env", c.environment));
     if file.exists() {
@@ -426,6 +518,18 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
     generated.insert("HASURA_JWT_CONFIG".into(), jwt.to_string());
     for (key, val) in images {
         generated.insert(format!("{}_IMAGE", key.to_uppercase()), val);
+    }
+    if c.environment != "local" {
+        let installed = super::workstation::Manifest::installed(root, c.provider.architecture)?;
+        for (key, kind) in [
+            ("FV_POSTGRES_IMAGE", "postgres"),
+            ("FV_RABBITMQ_IMAGE", "rabbitmq"),
+            ("HASURA_IMAGE", "hasura"),
+            ("CADDY_IMAGE", "caddy"),
+            ("CLOUDFLARED_IMAGE", "cloudflared"),
+        ] {
+            generated.insert(key.into(), installed.images[kind].tag.clone());
+        }
     }
     for value in generated.values() {
         fv_config::validate_owned_url(value, &c.cloudflare.zone_name)?;
