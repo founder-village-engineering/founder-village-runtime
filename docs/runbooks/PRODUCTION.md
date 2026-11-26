@@ -19,11 +19,34 @@ PostgreSQL, RabbitMQ, Hasura and workers run on the runtime's private network. H
 Run this command on the trusted release workstation or its deployment runner with Node 24, Rust, Git, Docker, OpenSSH, age, cloudflared and Gitleaks. The grant-issuance path also uses Terraform. The entrypoint installs missing checkout dependencies and builds the current native CLI. It accepts closed stdin.
 
 ~~~sh
-npm run --silent production:bootstrap -- preflight
-npm run production:bootstrap -- apply
+npm run --silent production:bootstrap -- preflight && npm run production:bootstrap -- apply
 ~~~
 
 The preflight reports missing or unreadable machine credentials by name and exits with status 1 when the projection is incomplete. It uses the deployer's credential resolver, syncs the selected Vaultwarden collection when configured, and counts grants that a delegated Cloudflare issuer can provide. Use `prepare` for live account, project, identity provider, and storage checks.
+
+### Resume a release blocked at preflight
+
+Use the production runner's preflight report to route each `missing` or `invalid` name to the authority below. Each authority supplies its issued value as a hidden field in the bound Vaultwarden item or as an owner-only file of the same name in the protected runner mount. Keep values in those channels. The required set contains 26 names. [Binding definitions](../../scripts/production/bindings.ts)
+
+| Supplying authority | Required bindings |
+| --- | --- |
+| Hetzner project owner | `FV_HCLOUD_TOKEN` |
+| Cloudflare account owner for the two apex zones | `CF_READ_TOKEN`, `CF_WRITE_TOKEN`, `CLOUDFLARE_PROVISION_TOKEN`, `FV_PAGES_API_TOKEN` |
+| Workforce identity provider and application registration owner | `OIDC_ISSUER`, `OIDC_AUDIENCE`, `OIDC_CLIENT_ID`, `FV_APP_OIDC_CLIENT_ID`, `OIDC_MFA_ACR` |
+| Administrator access policy owner | `ACCESS_ADMIN_EMAILS` |
+| Primary backup storage owner | `BACKUP_S3_ENDPOINT`, `BACKUP_S3_REGION`, `BACKUP_S3_BUCKET`, `BACKUP_S3_KEY`, `BACKUP_S3_SECRET` |
+| Independent immutable backup storage owner | `IMMUTABLE_ENDPOINT`, `IMMUTABLE_REGION`, `IMMUTABLE_BUCKET`, `IMMUTABLE_ACCESS_KEY`, `IMMUTABLE_SECRET_KEY` |
+| Audit storage owner | `AUDIT_ENDPOINT`, `AUDIT_REGION`, `AUDIT_BUCKET`, `AUDIT_ACCESS_KEY`, `AUDIT_SECRET_KEY` |
+
+The Cloudflare account owner can supply `FV_CF_TOKEN_ISSUER` to authorize issuance of the four dedicated Cloudflare grants. Preflight reports the outstanding grants under `delegated`. The release runner issues them during `apply`. [Cloudflare grant issuance](#generate-provider-grants)
+
+A vault import can also carry five fields from an enrolled workstation. The target and account pins use `FV_HETZNER_CANDIDATE` and `FV_CLOUDFLARE_ACCOUNT_ID`. The recovery recipient and application keys use `AGE_RECIPIENT`, `TEAM_CONTENT_KEY` and `AUDIT_HMAC_KEY`. Preflight counts the 26 release bindings above separately. The private operator SSH key, release-signing key and age recovery identity stay in their existing independent custody. [Workstation enrollment and import](../../scripts/production/vaultwarden.ts)
+
+For an existing protected mount at another location, set `CREDENTIALS_DIRECTORY` to its absolute directory path. For another configured Founder Village vault binding, set `FV_VAULTWARDEN_BINDING_FILE` to the absolute path of its owner-only binding file. The runner checks for conflicts when both sources supply a name.
+
+After the supplying authorities update the source, run `npm run production:bootstrap -- apply` in that runner environment. Both `prepare` and `apply` repeat preflight before building the native CLI, enrolling identities or contacting the infrastructure providers. A successful preflight establishes that the named inputs are present and readable or covered by the delegated issuer. Confirm provider validation, backup and restore checks, runtime promotion and Pages publication from the subsequent release results.
+
+### Workstation identity and release verification
 
 The runner enrolls separate operator and release-signing identities, pins the signer outside the release bundle, and creates an age recovery identity, Team encryption key and audit HMAC key. It reuses these on subsequent runs. An existing machine enrollment can project its original identities. Private state defaults to `~/.local/share/founder-village/production`. `FV_PRODUCTION_HOME` selects another persistent, owner-only directory outside the checkout. Include this directory in the workstation's protected backup. The age identity and the encrypted backup-verification key stay off the runtime VM.
 

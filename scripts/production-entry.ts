@@ -29,12 +29,6 @@ if (
   !existsSync(root + "node_modules/cf/bin/cf")
 )
   execute("npm", ["ci", "--no-audit", "--no-fund"], tools);
-if (action === "prepare" || action === "apply")
-  execute(
-    "cargo",
-    ["build", "--release", "--locked", "--quiet", "-p", "fv-cli"],
-    tools,
-  );
 execute(
   process.execPath,
   ["--import", "tsx", "scripts/production-bootstrap.ts", action],

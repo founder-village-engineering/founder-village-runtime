@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   chmod,
@@ -80,6 +81,38 @@ test("preflight accepts Vaultwarden bindings and rejects conflicting file projec
     useVaultwardenBindings(new Map());
     process.env = previous;
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("prepare and apply stop at the shared preflight before building or enrolling identities", async (t) => {
+  const temp = await mkdtemp(join(tmpdir(), "fv-bootstrap-gate-"));
+  t.after(() => rm(temp, { recursive: true, force: true }));
+  const workstation = join(temp, "workstation");
+  const credentials = join(temp, "credentials");
+  await mkdir(credentials, { mode: 0o700 });
+  const issuer = randomUUID();
+  await publish(join(credentials, "FV_CF_TOKEN_ISSUER"), issuer);
+  for (const action of ["prepare", "apply"]) {
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/production-entry.ts", action],
+      {
+        encoding: "utf8",
+        env: {
+          HOME: temp,
+          PATH: temp,
+          CREDENTIALS_DIRECTORY: credentials,
+          FV_PRODUCTION_HOME: workstation,
+        },
+      },
+    );
+    assert.equal(result.status, 1);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.credentialProjectionComplete, false);
+    assert.ok(report.missing.includes("OIDC_CLIENT_ID"));
+    assert.ok(report.delegated.includes("FV_PAGES_API_TOKEN"));
+    assert.ok(!(result.stdout + result.stderr).includes(issuer));
+    assert.equal(await exists(workstation), false);
   }
 });
 

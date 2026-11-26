@@ -32,6 +32,7 @@ import {
   privateText,
   publish,
   run,
+  runQuiet,
   stage,
   useVaultwardenBindings,
   workstationDirectory,
@@ -275,17 +276,30 @@ async function main() {
   const vault = await openProductionVault();
   const stored = vault && (await vault.read()).values;
   useVaultwardenBindings(stored ?? new Map());
-  if (action === "preflight") {
+  if (action !== "init") {
     const report = await credentialPreflight();
-    process.stdout.write(json({
-      ...report,
-      ...(stored ? { vaultwardenBindings: stored.size } : {}),
-    }));
-    process.exitCode = report.credentialProjectionComplete ? 0 : 1;
-    return;
+    if (action === "preflight" || !report.credentialProjectionComplete) {
+      process.stdout.write(
+        json({
+          ...report,
+          ...(stored ? { vaultwardenBindings: stored.size } : {}),
+        }),
+      );
+      process.exitCode = report.credentialProjectionComplete ? 0 : 1;
+      return;
+    }
   }
-  process.umask(0o077);
   process.chdir(root);
+  if (action === "prepare" || action === "apply")
+    await stage("Could not build the workstation release CLI.", () =>
+      runQuiet(
+        "cargo",
+        ["build", "--release", "--locked", "--quiet", "-p", "fv-cli"],
+        {},
+        7200_000,
+      ),
+    );
+  process.umask(0o077);
   const home = await workstationDirectory(root);
   const lock = join(home, "bootstrap.lock");
   if (!(await exists(lock))) await publish(lock, "");
