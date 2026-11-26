@@ -14,7 +14,7 @@ For unattended production, the runner performs the following steps from a verifi
 
 On the operator workstation, copy the environment's example to `config/<environment>.private.json` with mode 0600. Set `project` to the exact server name in the Hetzner project. For a VM created in the Hetzner Console, add `provider.existing_server` with its numeric `id` and assigned `ipv4` from that console. Keep the address and ID in this private manifest. The example's loopback SSH CIDR is a placeholder. Set a temporary allowlist for the operator's actual public IPv4 `/32` or IPv6 `/128`.
 
-Complete the Cloudflare account, zone, team and exact managed API, admin, and SSH names, OIDC endpoints and named root actors, backup endpoint, and independently verified immutable storage settings. The example enables Tunnel-based operator SSH through `cloudflare.ssh_domain`. Use a distinct one-label hostname such as `ssh-dev.example.com` for staging. The admin Access audience is filled by the Cloudflare bootstrap. With `npm ci` installed on the workstation, use `cf_project foundervillage status` in a workstation shell to confirm the signed-in account and active zone. Use that account's ID and zone in the private manifest. Pin the launcher hash using `shasum -a 256 node_modules/cf/bin/cf`. The example points to that launcher under the VM's fixed install path.
+Complete the Cloudflare account, zone, team and exact managed API, admin, and SSH names, OIDC endpoints and named root actors, and backup mode. The example enables Tunnel-based operator SSH through `cloudflare.ssh_domain`. Use a distinct one-label hostname such as `ssh-dev.example.com` for staging. The admin Access audience is filled by the Cloudflare bootstrap. With `npm ci` installed on the workstation, use `cf_project foundervillage status` in a workstation shell to confirm the signed-in account and active zone. Use that account's ID and zone in the private manifest. Pin the launcher hash using `shasum -a 256 node_modules/cf/bin/cf`. The example points to that launcher under the VM's fixed install path.
 
 ```sh
 manifest=config/staging.private.json
@@ -133,10 +133,11 @@ Require `firewall_rules_match: true` and `public_inbound_closed: true`. Confirm 
 | --- | --- |
 | Domain adapter | `CF_READ_TOKEN`, `CF_WRITE_TOKEN`. Account, zone, allowed names, launcher and checksum come from the manifest. |
 | OIDC | `OIDC_MFA_ACR` matching the IdP's signed assurance claim. |
-| Database backup | `BACKUP_S3_KEY`, `BACKUP_S3_SECRET`. Endpoint, bucket and region come from the manifest. |
+| Legacy S3 database backup | `BACKUP_S3_KEY`, `BACKUP_S3_SECRET`. Endpoint, bucket and region come from the manifest. |
 | Recovery escrow | `AGE_RECIPIENT`. The age identity and backup HMAC verification key belong in independent offline custody. |
-| Immutable mirror | `IMMUTABLE_ENDPOINT`, `IMMUTABLE_REGION`, `IMMUTABLE_BUCKET`, `IMMUTABLE_ACCESS_KEY`, `IMMUTABLE_SECRET_KEY`. |
-| Independent audit | `AUDIT_ENDPOINT`, `AUDIT_REGION`, `AUDIT_BUCKET`, `AUDIT_ACCESS_KEY`, `AUDIT_SECRET_KEY`, `AUDIT_HMAC_KEY`. |
+| Legacy S3 immutable mirror | `IMMUTABLE_ENDPOINT`, `IMMUTABLE_REGION`, `IMMUTABLE_BUCKET`, `IMMUTABLE_ACCESS_KEY`, `IMMUTABLE_SECRET_KEY`. |
+| Audit authentication | The workstation generates `AUDIT_HMAC_KEY` and captures the authenticated ledger in its backup. |
+| Legacy S3 audit archive | `AUDIT_ENDPOINT`, `AUDIT_REGION`, `AUDIT_BUCKET`, `AUDIT_ACCESS_KEY`, `AUDIT_SECRET_KEY`. |
 | Files | `OBJECT_ENDPOINT`, `OBJECT_REGION`, `OBJECT_BUCKET`, `OBJECT_ACCESS_KEY`, `OBJECT_SECRET_KEY`. |
 | Alerts | `ALERT_WEBHOOK_URL` for an independent HTTPS receiver. |
 | Members payments | `MEMBERS_*` credentials are scoped to the API service. |

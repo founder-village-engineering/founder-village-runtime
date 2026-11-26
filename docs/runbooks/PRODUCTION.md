@@ -22,7 +22,7 @@ Run this command on the trusted release workstation or its deployment runner wit
 npm run --silent production:bootstrap -- preflight && npm run production:bootstrap -- apply
 ~~~
 
-The preflight reports missing or unreadable machine credentials by name and exits with status 1 when the projection is incomplete. It uses the deployer's credential resolver, syncs the selected Vaultwarden collection when configured, and counts grants that a delegated Cloudflare issuer can provide. Use `prepare` for live account, project, identity provider, and storage checks.
+The preflight reports missing or unreadable machine credentials by name and exits with status 1 when the projection is incomplete. It uses the deployer's credential resolver, syncs the selected Vaultwarden collection when configured, and counts grants that a delegated Cloudflare issuer can provide. Use `prepare` for live account, project and sign-in provider checks. Bootstrap reports the selected backup mode.
 
 ### Resume a release blocked at preflight
 
@@ -30,9 +30,9 @@ On a first deployment, a missing binding often means its resource or grant still
 
 At the chosen identity provider, register separate public clients for the administration console and the app, enable authorization code with S256 PKCE, and register the API audience. The admin client redirects to the configured admin origin at `/auth/callback`. The app client uses that path on each registered production app origin. Set the approved administrator email policy and use the assurance value actually issued after the required MFA. [Administrator sign-in requirements](ADMIN_SECURITY.md)
 
-For storage, use provider administration sessions to create a private primary backup bucket, a versioned Object Lock mirror under independent ownership, and a private audit bucket that accepts conditional, server-side encrypted writes. Issue separate credentials for the three jobs. [Immutable backup writes](../../scripts/replicate-backups.ts) · [Audit archive writes](../../packages/operations/audit.ts)
+New deployments use the Founder Village workstation backup. The VM captures encrypted PostgreSQL backups and recovery files. The release workstation pulls them over pinned SSH into this checkout’s Git-ignored `backups/` directory, verifies the authenticated archive and exercises a restore from the returned bytes. The backup toolchain and audit archive are part of this repository. [Backup and recovery](RECOVERY.md)
 
-Use the production runner's preflight report to route each `missing` or `invalid` name to the authority below. Each authority supplies its issued value as a hidden field in the bound Vaultwarden item or as an owner-only file of the same name in the protected runner mount. Keep values in those channels. The required set contains 26 names. [Binding definitions](../../scripts/production/bindings.ts)
+Use the production runner's preflight report to route each `missing` or `invalid` name to the authority below. Each authority supplies its issued value as a hidden field in the bound Vaultwarden item or as an owner-only file of the same name in the protected runner mount. Keep values in those channels. Workstation mode requires the following 11 names. [Binding definitions](../../scripts/production/bindings.ts)
 
 | Supplying authority | Required bindings |
 | --- | --- |
@@ -40,13 +40,10 @@ Use the production runner's preflight report to route each `missing` or `invalid
 | Cloudflare account owner for the two apex zones | `CF_READ_TOKEN`, `CF_WRITE_TOKEN`, `CLOUDFLARE_PROVISION_TOKEN`, `FV_PAGES_API_TOKEN` |
 | Workforce identity provider and application registration owner | `OIDC_ISSUER`, `OIDC_AUDIENCE`, `OIDC_CLIENT_ID`, `FV_APP_OIDC_CLIENT_ID`, `OIDC_MFA_ACR` |
 | Administrator access policy owner | `ACCESS_ADMIN_EMAILS` |
-| Primary backup storage owner | `BACKUP_S3_ENDPOINT`, `BACKUP_S3_REGION`, `BACKUP_S3_BUCKET`, `BACKUP_S3_KEY`, `BACKUP_S3_SECRET` |
-| Independent immutable backup storage owner | `IMMUTABLE_ENDPOINT`, `IMMUTABLE_REGION`, `IMMUTABLE_BUCKET`, `IMMUTABLE_ACCESS_KEY`, `IMMUTABLE_SECRET_KEY` |
-| Audit storage owner | `AUDIT_ENDPOINT`, `AUDIT_REGION`, `AUDIT_BUCKET`, `AUDIT_ACCESS_KEY`, `AUDIT_SECRET_KEY` |
 
 The Cloudflare account owner can supply `FV_CF_TOKEN_ISSUER` to authorize issuance of the four dedicated Cloudflare grants. Preflight reports the outstanding grants under `delegated`. The release runner issues them during `apply`. [Cloudflare grant issuance](#generate-provider-grants)
 
-A vault import can also carry five fields from an enrolled workstation. The target and account pins use `FV_HETZNER_CANDIDATE` and `FV_CLOUDFLARE_ACCOUNT_ID`. The recovery recipient and application keys use `AGE_RECIPIENT`, `TEAM_CONTENT_KEY` and `AUDIT_HMAC_KEY`. Preflight counts the 26 release bindings above separately. The private operator SSH key, release-signing key and age recovery identity stay in their existing independent custody. [Workstation enrollment and import](../../scripts/production/vaultwarden.ts)
+A vault import can also carry five fields from an enrolled workstation. The target and account pins use `FV_HETZNER_CANDIDATE` and `FV_CLOUDFLARE_ACCOUNT_ID`. The recovery recipient and application keys use `AGE_RECIPIENT`, `TEAM_CONTENT_KEY` and `AUDIT_HMAC_KEY`. Preflight counts these enrollment fields separately from release bindings. The private operator SSH key, release-signing key and age recovery identity stay in their existing independent custody. [Workstation enrollment and import](../../scripts/production/vaultwarden.ts)
 
 For an existing protected mount at another location, set `CREDENTIALS_DIRECTORY` to its absolute directory path. For another configured Founder Village vault binding, set `FV_VAULTWARDEN_BINDING_FILE` to the absolute path of its owner-only binding file. The runner checks for conflicts when both sources supply a name.
 
@@ -58,7 +55,7 @@ The runner enrolls separate operator and release-signing identities, pins the si
 
 `init` generates and verifies workstation material offline when using local credential mounts. `prepare` performs provider reads and publishes validated files under `current/` in the private workstation directory. These include the production manifest, bootstrap settings, SSH host pins, Pages account binding and host catalog. An incomplete generation never becomes current.
 
-`apply` signs the native release, reconciles Tunnel, Access and DNS, enrolls or verifies SSH, and installs the signed runtime. It checks the immutable backup and exercises an isolated restore before promotion. It verifies the external API revision, admin Access challenge and a new pinned SSH session with sudo before closing public SSH. It then verifies the provider firewall and SSH again, publishes one app build to both Pages projects, and checks the app on all four origins. A successful repeat deployment verifies the existing release against its receipt. An interrupted lockdown resumes through the Tunnel.
+`apply` signs the native release, reconciles Tunnel, Access and DNS, enrolls or verifies SSH, and installs the signed runtime. It verifies the backup in the selected destination and exercises an isolated restore before promotion. It verifies the external API revision, admin Access challenge and a new pinned SSH session with sudo before closing public SSH. It then verifies the provider firewall and SSH again, publishes one app build to both Pages projects, and checks the app on all four origins. A repeat deployment checks the saved revision and configuration against the serving API, firewall, protected SSH route and backup. Once these checks pass, an interrupted Pages publication resumes against that runtime. The frontend receipt is recorded after both projects pass public verification. An interrupted lockdown resumes through the Tunnel.
 
 ### Vaultwarden distribution
 
@@ -117,7 +114,7 @@ When the runner already has a delegated `FV_CF_TOKEN_ISSUER`, the same command u
 
 The optional Cloudflare credential issuer uses a delegated Founder Village account token with account-token management and visibility of both active zones. It creates dedicated DNS, Tunnel and Pages credentials in that account. Its Terraform state and plans stay in the workstation's protected directory. The runner checks the saved plan before applying and stops on deletions and replacements. [Cloudflare grant configuration](../../infra/production-authority/cloudflare.tf)
 
-Runtime deployments use the organization's existing OIDC provider and S3-compatible backup service. The Pages site can be published independently.
+Runtime deployments use the organization's OIDC provider. Existing runtimes enrolled in S3 backup mode continue to use their primary bucket, immutable mirror and audit bucket, including their 15 storage bindings. First deployments select workstation mode in the [production template](../../config/production.example.json).
 
 An existing provider deployment can project its issued bindings directly. The [input resolver](../../scripts/production/discovery.ts) accepts dedicated DNS read/write, Tunnel provisioning and Pages credentials, OIDC registration outputs, and backup, mirror, audit and optional file-service credentials. The host receives only its runtime allowlist. Existing keys can be enrolled through `FV_OPERATOR_SSH_KEY`, `FV_RELEASE_SIGNING_KEY`, `AGE_RECIPIENT`, `TEAM_CONTENT_KEY` and `AUDIT_HMAC_KEY`.
 

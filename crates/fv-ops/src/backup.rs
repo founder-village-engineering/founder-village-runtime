@@ -1,8 +1,10 @@
+mod snapshot;
 use anyhow::{Context, Result, ensure};
 use fv_config::{Config, digest, private_write};
 use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
 use sha2::Sha256;
+pub use snapshot::{export_snapshot, import_drill};
 use std::{collections::BTreeMap, fs, path::Path};
 
 /// The workstation stores this encrypted verifier independently of the mirrored
@@ -143,9 +145,19 @@ pub fn capture(root: &Path, c: &Config, kind: &str) -> Result<()> {
         );
     }
 
-    let body = serde_json::to_vec(
-        &json!({"environment":c.environment,"config_hash":digest(&serde_json::to_vec(c)?),"offsite":c.environment!="local","applications":fv_config::applications(root)?,"databases":database_names,"postgres_settings":details["settings"],"inventory":inventory}),
-    )?;
+    let stored_offsite = c.environment != "local" && !c.backup.workstation();
+    let mut payload = json!({"environment":c.environment,"config_hash":digest(&serde_json::to_vec(c)?),"offsite":stored_offsite,"applications":fv_config::applications(root)?,"databases":database_names,"postgres_settings":details["settings"],"inventory":inventory});
+    if c.backup.workstation() {
+        let point_started = std::time::Instant::now();
+        let (marker, lsn) = recovery_point(root, c)?;
+        ensure!(
+            point_started.elapsed().as_secs() <= c.backup.rpo_seconds as u64,
+            "WAL archive exceeded recovery point objective"
+        );
+        payload["vaultwarden_included"] = json!(c.vaultwarden_domain.is_some());
+        payload["pitr_point"] = json!({"marker":marker,"lsn":lsn});
+    }
+    let body = serde_json::to_vec(&payload)?;
     let e = super::env(root, c)?;
     let mut mac = Hmac::<Sha256>::new_from_slice(e["BACKUP_HMAC_KEY"].as_bytes())?;
     mac.update(&body);
@@ -183,31 +195,37 @@ pub fn capture(root: &Path, c: &Config, kind: &str) -> Result<()> {
             &env,
             600,
         )?;
-        fv_host::run(
-            "node",
-            &[
-                "--import",
-                "tsx",
-                "scripts/replicate-backups.ts",
-                &fingerprint,
-            ],
-            root,
-            &env,
-            7200,
-        )?;
-        private_write(
-            &root.join(format!(".state/{}/immutable-backup", c.environment)),
-            fingerprint.as_bytes(),
-        )?;
+        if c.backup.workstation() {
+            snapshot::pack(root, c, &fingerprint)?;
+        } else {
+            fv_host::run(
+                "node",
+                &[
+                    "--import",
+                    "tsx",
+                    "scripts/replicate-backups.ts",
+                    &fingerprint,
+                ],
+                root,
+                &env,
+                7200,
+            )?;
+            private_write(
+                &root.join(format!(".state/{}/immutable-backup", c.environment)),
+                fingerprint.as_bytes(),
+            )?;
+        }
     }
     let mut db = super::client(root, c)?;
-    db.execute("INSERT INTO control.backups(id,manifest_hash,offsite,verified) VALUES(gen_random_uuid(),$1,$2,true)",&[&digest(&body),&(c.environment!="local")])?;
+    db.execute("INSERT INTO control.backups(id,manifest_hash,offsite,verified) VALUES(gen_random_uuid(),$1,$2,true)",&[&digest(&body),&stored_offsite])?;
     super::record(root, c, "backup.capture", "succeeded")?;
     Ok(())
 }
 pub fn verify(root: &Path, c: &Config) -> Result<()> {
     let fingerprint = verify_inventory(root, c)?;
-    if c.environment != "local" {
+    if c.backup.workstation() {
+        snapshot::verify_copy(root, c, &fingerprint)?;
+    } else if c.environment != "local" {
         let mirrored =
             fs::read_to_string(root.join(format!(".state/{}/immutable-backup", c.environment)))
                 .context("no verified immutable backup copy")?;
@@ -252,6 +270,13 @@ fn verify_inventory(root: &Path, c: &Config) -> Result<String> {
         payload["environment"] == c.environment,
         "backup environment mismatch"
     );
+    if c.backup.workstation() {
+        captured_point(&payload)?;
+        ensure!(
+            c.vaultwarden_domain.is_none() || payload["vaultwarden_included"] == true,
+            "current workstation snapshot must include the configured Vaultwarden store"
+        );
+    }
     let current = info(root, c)?;
     let backups = current[0]["backup"]
         .as_array()
@@ -279,43 +304,7 @@ fn verify_inventory(root: &Path, c: &Config) -> Result<String> {
     );
     Ok(digest(body.as_bytes()))
 }
-pub fn restore_drill(root: &Path, c: &Config) -> Result<()> {
-    verify(root, c)?;
-    let started = std::time::Instant::now();
-    let receipt: Value = serde_json::from_slice(&fs::read(
-        root.join(format!(".state/{}/backup-receipt.json", c.environment)),
-    )?)?;
-    let payload: Value = serde_json::from_str(
-        receipt["body"]
-            .as_str()
-            .context("missing authenticated backup body")?,
-    )?;
-    let mut recovery_options = String::new();
-    for (name, value) in payload["postgres_settings"]
-        .as_object()
-        .context("backup missing recovery settings; capture a new snapshot")?
-    {
-        ensure!(
-            [
-                "max_connections",
-                "max_worker_processes",
-                "max_wal_senders",
-                "max_prepared_transactions",
-                "max_locks_per_transaction",
-                "track_commit_timestamp"
-            ]
-            .contains(&name.as_str()),
-            "unknown recovery parameter"
-        );
-        let value = value.as_str().context("invalid recovery parameter")?;
-        ensure!(
-            !value.is_empty()
-                && ((value.bytes().all(|b| b.is_ascii_digit()) && value.parse::<u32>()? <= 10000)
-                    || (name == "track_commit_timestamp" && ["on", "off"].contains(&value))),
-            "unsafe recovery parameter"
-        );
-        recovery_options.push_str(&format!(" -c {name}={value}"));
-    }
+fn recovery_point(root: &Path, c: &Config) -> Result<(String, String)> {
     let marker = format!("fv-drill-{}", &fv_config::random_secret()[..12]);
     let source = format!("{}-postgres-1", c.project);
     let sql = format!("SELECT pg_create_restore_point('{marker}'); SELECT pg_switch_wal();");
@@ -359,6 +348,80 @@ pub fn restore_drill(root: &Path, c: &Config) -> Result<()> {
             "check",
         ],
     )?;
+    Ok((marker, lsn))
+}
+fn captured_point(payload: &Value) -> Result<(String, String)> {
+    let marker = payload["pitr_point"]["marker"]
+        .as_str()
+        .context("missing snapshot restore point")?;
+    let lsn = payload["pitr_point"]["lsn"]
+        .as_str()
+        .context("missing snapshot restore LSN")?;
+    ensure!(
+        marker
+            .strip_prefix("fv-drill-")
+            .is_some_and(|s| s.len() == 12 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+            && lsn
+                .split_once('/')
+                .is_some_and(|(a, b)| [a, b].iter().all(|v| !v.is_empty()
+                    && v.len() <= 8
+                    && v.bytes().all(|b| b.is_ascii_hexdigit()))),
+        "invalid snapshot recovery point"
+    );
+    Ok((marker.into(), lsn.into()))
+}
+
+pub fn restore_drill(root: &Path, c: &Config) -> Result<()> {
+    if c.backup.workstation() {
+        let fingerprint = verify_inventory(root, c)?;
+        let archive = snapshot::local_archive(root, c, &fingerprint)?;
+        return drill(root, c, Some((&archive, false)));
+    }
+    verify(root, c)?;
+    drill(root, c, None)
+}
+
+fn drill(root: &Path, c: &Config, snapshot: Option<(&Path, bool)>) -> Result<()> {
+    let started = std::time::Instant::now();
+    let receipt: Value = serde_json::from_slice(&fs::read(
+        root.join(format!(".state/{}/backup-receipt.json", c.environment)),
+    )?)?;
+    let payload: Value = serde_json::from_str(
+        receipt["body"]
+            .as_str()
+            .context("missing authenticated backup body")?,
+    )?;
+    let mut recovery_options = String::new();
+    for (name, value) in payload["postgres_settings"]
+        .as_object()
+        .context("backup missing recovery settings; capture a new snapshot")?
+    {
+        ensure!(
+            [
+                "max_connections",
+                "max_worker_processes",
+                "max_wal_senders",
+                "max_prepared_transactions",
+                "max_locks_per_transaction",
+                "track_commit_timestamp"
+            ]
+            .contains(&name.as_str()),
+            "unknown recovery parameter"
+        );
+        let value = value.as_str().context("invalid recovery parameter")?;
+        ensure!(
+            !value.is_empty()
+                && ((value.bytes().all(|b| b.is_ascii_digit()) && value.parse::<u32>()? <= 10000)
+                    || (name == "track_commit_timestamp" && ["on", "off"].contains(&value))),
+            "unsafe recovery parameter"
+        );
+        recovery_options.push_str(&format!(" -c {name}={value}"));
+    }
+    let (marker, lsn) = if snapshot.is_some() {
+        captured_point(&payload)?
+    } else {
+        recovery_point(root, c)?
+    };
     ensure!(
         started.elapsed().as_secs() <= c.backup.rpo_seconds as u64,
         "WAL archive exceeded recovery point objective"
@@ -375,21 +438,36 @@ pub fn restore_drill(root: &Path, c: &Config) -> Result<()> {
     } else {
         let installed = super::workstation::Manifest::installed(root, c.provider.architecture)?;
         installed.load_images(root)?;
-        installed.images["postgres"].tag.clone()
+        installed.images["postgres"].id.clone()
     };
     let mount = format!(
         "type=bind,source={},target=/run/fv/config,readonly",
         state.join("postgres/pgbackrest.conf").display()
     );
-    let backup_mount = format!(
-        "source={}_backups,target=/var/lib/pgbackrest,readonly",
-        c.project
-    );
+    let (backup_mount, extract) = if let Some((archive, _)) = snapshot {
+        (
+            format!(
+                "type=bind,source={},target=/run/fv/import.tar,readonly",
+                archive.display()
+            ),
+            // All writes go to a new isolated container, with only the archive and config mounted read-only.
+            // The restored database never has access to the serving backup volume.
+            "mkdir -p /var/lib/pgbackrest; tar --no-same-owner -xf /run/fv/import.tar -C /var/lib/pgbackrest --strip-components=1 repository; chown -R postgres:postgres /var/lib/pgbackrest; ",
+        )
+    } else {
+        (
+            format!(
+                "source={}_backups,target=/var/lib/pgbackrest,readonly",
+                c.project
+            ),
+            "",
+        )
+    };
     // Parameter names are allowlisted, and values are numeric or on/off, before shell rendering.
     let script = format!(
-        "cp /run/fv/config /tmp/pgbackrest.conf; chown postgres:postgres /tmp/pgbackrest.conf; chmod 600 /tmp/pgbackrest.conf; gosu postgres pgbackrest --config=/tmp/pgbackrest.conf --stanza=main --pg1-path=/tmp/restored --type=name --target={marker} --target-action=promote restore; exec gosu postgres postgres -D /tmp/restored -c listen_addresses='' -c archive_mode=off -c unix_socket_directories=/tmp {recovery_options}"
+        "{extract}cp /run/fv/config /tmp/pgbackrest.conf; chown postgres:postgres /tmp/pgbackrest.conf; chmod 600 /tmp/pgbackrest.conf; gosu postgres pgbackrest --config=/tmp/pgbackrest.conf --stanza=main --pg1-path=/tmp/restored --type=name --target={marker} --target-action=promote restore; exec gosu postgres postgres -D /tmp/restored -c listen_addresses='' -c archive_mode=off -c unix_socket_directories=/tmp {recovery_options}"
     );
-    let network = if c.environment == "local" {
+    let network = if c.environment == "local" || snapshot.is_some() {
         "none"
     } else {
         "bridge"
@@ -405,6 +483,8 @@ pub fn restore_drill(root: &Path, c: &Config) -> Result<()> {
             &name,
             "--network",
             network,
+            "--tmpfs",
+            "/var/lib/postgresql/data:size=1m",
             "--mount",
             &backup_mount,
             "--mount",
@@ -420,49 +500,44 @@ pub fn restore_drill(root: &Path, c: &Config) -> Result<()> {
         30,
     )?;
     let result = (|| -> Result<()> {
-        let mut ready = false;
-        for _ in 0..180 {
-            let check = fv_host::docker(root)
-                .args(["exec", &name, "pg_isready", "-h", "/tmp", "-U", "postgres"])
+        let consistency =
+            format!("SELECT NOT pg_is_in_recovery() AND pg_last_wal_replay_lsn()>='{lsn}'::pg_lsn");
+        loop {
+            let query = fv_host::docker(root)
+                .args([
+                    "exec",
+                    "-u",
+                    "postgres",
+                    &name,
+                    "psql",
+                    "-h",
+                    "/tmp",
+                    "-U",
+                    "postgres",
+                    "-d",
+                    "postgres",
+                    "-At",
+                    "-c",
+                    &consistency,
+                ])
                 .output()?;
-            if check.status.success() {
-                ready = true;
+            if query.status.success() && String::from_utf8_lossy(&query.stdout).trim() == "t" {
                 break;
             }
+            // A hot standby can already accept queries while replay is still running.
             let state = fv_host::docker(root)
                 .args(["inspect", "--format", "{{.State.Running}}", &name])
                 .output()?;
             ensure!(
-                String::from_utf8_lossy(&state.stdout).trim() == "true",
+                state.status.success() && String::from_utf8_lossy(&state.stdout).trim() == "true",
                 "isolated restore stopped; inspect restore diagnostics"
+            );
+            ensure!(
+                started.elapsed().as_secs() < c.backup.rto_seconds as u64,
+                "PITR marker was not reached within the restore objective"
             );
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
-        ensure!(ready, "isolated restore did not become ready");
-        let consistency =
-            format!("SELECT NOT pg_is_in_recovery() AND pg_last_wal_replay_lsn()>='{lsn}'::pg_lsn");
-        let checked = fv_host::docker(root)
-            .args([
-                "exec",
-                "-u",
-                "postgres",
-                &name,
-                "psql",
-                "-h",
-                "/tmp",
-                "-U",
-                "postgres",
-                "-d",
-                "postgres",
-                "-At",
-                "-c",
-                &consistency,
-            ])
-            .output()?;
-        ensure!(
-            checked.status.success() && String::from_utf8_lossy(&checked.stdout).trim() == "t",
-            "PITR marker not reached"
-        );
 
         let mut targets=fv_config::applications(root)?.into_iter().map(|a|(a.database,"SELECT extversion FROM pg_extension WHERE extname='vector'; SELECT count(*) FROM public.fv_migrations; SELECT count(*) FROM app.records;".to_string())).collect::<Vec<_>>();
         targets.push((
@@ -500,11 +575,20 @@ pub fn restore_drill(root: &Path, c: &Config) -> Result<()> {
             "recovery time target exceeded"
         );
         let mut db = super::client(root, c)?;
-        db.execute("UPDATE control.backups SET restored=true WHERE id=(SELECT id FROM control.backups ORDER BY created_at DESC LIMIT 1)",&[])?;
+        let fingerprint = digest(
+            receipt["body"]
+                .as_str()
+                .context("missing signed backup inventory")?
+                .as_bytes(),
+        );
+        db.execute(
+            "UPDATE control.backups SET restored=true WHERE manifest_hash=$1",
+            &[&fingerprint],
+        )?;
         private_write(
             &state.join("restore-receipt.json"),
             &serde_json::to_vec(
-                &json!({"environment":c.environment,"target":name,"seconds":started.elapsed().as_secs(),"isolated":true,"pitr_marker":marker,"pitr_lsn":lsn,"checks":["named-point-in-time-recovery","postgres-start","vector-extension","app-migrations","control-migrations","data-queries"],"clean_host":false}),
+                &json!({"environment":c.environment,"target":name,"seconds":started.elapsed().as_secs(),"isolated":true,"backup":fingerprint,"source":match snapshot {Some((_,true))=>"workstation-returned",Some((_,false))=>"host-snapshot",None=>"configured-repository"},"pitr_marker":marker,"pitr_lsn":lsn,"checks":["named-point-in-time-recovery","postgres-start","vector-extension","app-migrations","control-migrations","data-queries"],"clean_host":false}),
             )?,
         )?;
         super::record(root, c, "backup.restore-drill", "succeeded")?;

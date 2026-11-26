@@ -18,6 +18,7 @@ import {
   launcherHash,
   loadInputs,
   oidcSettings,
+  productionBackupMode,
   providerBinding,
   storageBinding,
 } from "./production/discovery.ts";
@@ -85,17 +86,11 @@ export async function prepare(
   const issued = issuer
     ? await stage(
         "Delegated Founder Village Cloudflare grant issuance failed.",
-        () =>
-          issueGrants(
-            rootDir,
-            home,
-            work,
-            apply,
-            issuer,
-          ),
+        () => issueGrants(rootDir, home, work, apply, issuer),
       )
     : {};
-  const { values, host } = await loadInputs(issued);
+  const mode = await productionBackupMode(rootDir, home);
+  const { values, host } = await loadInputs(issued, mode);
   const [cloud, oidc, backup, sha] = await Promise.all([
     stage(
       "Cloudflare did not verify both active apex zones and the Access organization.",
@@ -112,9 +107,17 @@ export async function prepare(
     stage("OIDC discovery or client policy validation failed.", () =>
       oidcSettings(values),
     ),
-    stage("Independent immutable storage custody could not be verified.", () =>
-      storageBinding(values),
-    ),
+    mode === "s3"
+      ? stage(
+          "Independent immutable storage custody could not be verified.",
+          () => storageBinding(values),
+        )
+      : {
+          s3_endpoint: "",
+          bucket: "",
+          region: "",
+          immutable_copy_confirmed: false,
+        },
     launcherHash(rootDir),
   ]);
   // Pin account custody across workstation checkouts as well as within the repo.
@@ -132,7 +135,13 @@ export async function prepare(
     provider: server.provider,
     auth: oidc,
     cloudflare: { ...template.cloudflare, ...cloud, cf_sha256: sha },
-    backup: { ...template.backup, ...backup },
+    backup: {
+      retention_days: template.backup.retention_days,
+      rpo_seconds: template.backup.rpo_seconds,
+      rto_seconds: template.backup.rto_seconds,
+      ...backup,
+      ...(mode === "workstation" ? { mode } : {}),
+    },
     ssh_cidrs: [] as string[],
   };
   const file = join(work, "production.private.json");

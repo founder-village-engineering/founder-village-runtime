@@ -60,6 +60,7 @@ function pathsToScan(staged: boolean): Set<string> {
 function pathViolation(file: string): string | undefined {
   const name = basename(file).toLowerCase();
   if (
+    /^backups(?:\/|$)/i.test(file) ||
     /(?:^|\/)(?:\.state|secrets)(?:\/|$)/i.test(file) ||
     /(?:\.private\.json|\.tfstate[^/]*|\.(?:key|p8|p12|pfx|jks|kdbx))$/.test(
       name,

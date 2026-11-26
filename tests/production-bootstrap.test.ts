@@ -24,6 +24,9 @@ import { checkGrantPlan } from "../scripts/production/authority.ts";
 import {
   credentialPreflight,
   type CfRequest,
+  loadInputs,
+  productionBackupMode,
+  storageBinding,
 } from "../scripts/production/discovery.ts";
 import {
   acquireWorkstationLock,
@@ -56,7 +59,7 @@ test("credential preflight reports absent, unreadable and delegated grants by na
       return fixtureSecret;
     if (name === "FV_PAGES_API_TOKEN") throw new Error(fixtureSecret);
     return undefined;
-  });
+  }, "workstation");
   assert.equal(result.credentialProjectionComplete, false);
   assert.deepEqual(result.invalid, ["FV_PAGES_API_TOKEN"]);
   assert.deepEqual(result.mounted, ["OIDC_CLIENT_ID"]);
@@ -66,15 +69,33 @@ test("credential preflight reports absent, unreadable and delegated grants by na
     "CF_WRITE_TOKEN",
   ]);
   assert.ok(result.missing.includes("FV_HCLOUD_TOKEN"));
-  assert.ok(result.missing.includes("IMMUTABLE_ACCESS_KEY"));
+  assert.equal(result.backupMode, "workstation");
+  assert.ok(!result.missing.includes("IMMUTABLE_ACCESS_KEY"));
   assert.ok(!JSON.stringify(result).includes(fixtureSecret));
 
-  const complete = await credentialPreflight(async (name) =>
-    name === "FV_CF_TOKEN_ISSUER" ? undefined : "fixture-" + name,
+  const complete = await credentialPreflight(
+    async (name) =>
+      name === "FV_CF_TOKEN_ISSUER" ? undefined : "fixture-" + name,
+    "workstation",
   );
   assert.equal(complete.credentialProjectionComplete, true);
   assert.deepEqual(complete.delegated, []);
   assert.deepEqual(complete.missing, []);
+});
+
+test("an enrolled S3 runtime keeps its storage requirements on upgrade", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "fv-backup-mode-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await mkdir(join(home, "current"), { mode: 0o700 });
+  await publish(
+    join(home, "current/production.private.json"),
+    JSON.stringify({ backup: { bucket: "fixture" } }),
+  );
+  const mode = await productionBackupMode(process.cwd(), home);
+  assert.equal(mode, "s3");
+  const report = await credentialPreflight(async () => undefined, mode);
+  assert.equal(report.missing.length, 26);
+  assert.ok(report.missing.includes("IMMUTABLE_ACCESS_KEY"));
 });
 
 test("preflight accepts Vaultwarden bindings and rejects conflicting file projections", async () => {
@@ -124,6 +145,8 @@ test("prepare and apply stop at the shared preflight before building or enrollin
     const report = JSON.parse(result.stdout);
     assert.equal(report.credentialProjectionComplete, false);
     assert.ok(report.missing.includes("OIDC_CLIENT_ID"));
+    assert.equal(report.backupMode, "workstation");
+    assert.ok(!report.missing.includes("AUDIT_ENDPOINT"));
     assert.ok(report.delegated.includes("FV_PAGES_API_TOKEN"));
     assert.ok(!(result.stdout + result.stderr).includes(issuer));
     assert.equal(await exists(workstation), false);
@@ -203,6 +226,15 @@ async function deploymentFixture(
   const trace =
     'import { appendFileSync } from "node:fs"; const record = (line: string) => appendFileSync("../trace", line + "\\n");\n';
   await writeFile(
+    join(scripts, "workstation-backup.ts"),
+    trace +
+      'if (process.argv.slice(2).join(" ") !== "pull --deployment-route" || !process.env.FV_PRODUCTION_HOME || process.env.FV_HCLOUD_TOKEN) throw new Error(); record("workstation restore");',
+  );
+  await writeFile(
+    join(scripts, "workstation-backup-install.ts"),
+    trace + 'record("backup schedule");',
+  );
+  await writeFile(
     join(scripts, "cloudflare-bootstrap.ts"),
     trace +
       [
@@ -236,6 +268,7 @@ async function deploymentFixture(
       [
         'const action=process.argv[2]; if ((action !== "verify") !== Boolean(process.env.CLOUDFLARE_API_TOKEN) || process.env.FV_HCLOUD_TOKEN) throw new Error();',
         'record("pages " + action);',
+        'if (action === "deploy") { const fs = await import("node:fs"); if (!fs.existsSync("../pages-attempt")) { fs.writeFileSync("../pages-attempt", ""); process.exit(1); } }',
       ].join("\n"),
   );
   await writeFile(
@@ -251,6 +284,7 @@ async function deploymentFixture(
         '","encrypted":"-----BEGIN AGE ENCRYPTED FILE-----fixture-----END AGE ENCRYPTED FILE-----"}\' ;;',
       "*install-catalog) cat >/dev/null ;;",
       '*seal-ssh) test -n "${TUNNEL_SERVICE_TOKEN_SECRET:-}"; echo "host close" >> ../trace ;;',
+      '*"backup export-info") echo \'{"backup":"' + "b".repeat(64) + "\"}' ;;",
       '"sudo -n true") test -n "${TUNNEL_SERVICE_TOKEN_SECRET:-}"; echo "tunnel ssh" >> ../trace ;;',
       "esac",
     ].join("\n"),
@@ -546,6 +580,9 @@ test("A machine generates a complete private production profile and reuses trust
     generation = await readlink(join(home, "current"));
   assert.deepEqual(first.manifest.ssh_cidrs, ["192.0.2.20/32"]);
   assert.equal(first.manifest.cloudflare.account_id, cfAccount);
+  assert.equal(first.manifest.backup.mode, "workstation");
+  assert.equal(first.manifest.backup.immutable_copy_confirmed, false);
+  assert.equal(first.runtime.BACKUP_S3_KEY, undefined);
   assert.equal(
     first.manifest.auth.frontend_client_ids["founder-village-app"],
     "app-client",
@@ -562,7 +599,10 @@ test("A machine generates a complete private production profile and reuses trust
   await assert.rejects(prepareOnce, /active apex zones/);
   conflictingZone = false;
   objectLock = false;
-  await assert.rejects(prepareOnce, /immutable storage/);
+  await assert.rejects(
+    storageBinding((await loadInputs({}, "s3")).values),
+    /custody/,
+  );
   assert.equal(await readlink(join(home, "current")), generation);
   objectLock = true;
   await deploymentFixture(checkout, original, first);
@@ -572,12 +612,16 @@ test("A machine generates a complete private production profile and reuses trust
   const closed = await prepareOnce();
   assert.deepEqual(closed.manifest.ssh_cidrs, []);
   assert.equal(closed.bootstrap.host, "ssh.foundervillage.org");
-  await deploy(closed);
+  await assert.rejects(deploy(closed), /Pages deploy failed/);
+  assert(!(await exists(join(home, "deployment.json"))));
+  assert(await exists(join(home, "runtime-deployment.json")));
+  await deploy(await prepareOnce());
   const operations = () => readFile(join(temp, "trace"), "utf8");
   assert.deepEqual((await operations()).trim().split("\n"), [
     "cf apply",
     "provider open",
     "install direct",
+    "workstation restore",
     "cf verify",
     "public api",
     "tunnel ssh",
@@ -585,6 +629,7 @@ test("A machine generates a complete private production profile and reuses trust
     "provider close",
     "cf apply",
     "install tunnel",
+    "workstation restore",
     "cf verify",
     "public api",
     "tunnel ssh",
@@ -592,6 +637,14 @@ test("A machine generates a complete private production profile and reuses trust
     "provider close",
     "tunnel ssh",
     "public api",
+    "backup schedule",
+    "pages provision",
+    "pages deploy",
+    "cf verify",
+    "tunnel ssh",
+    "public api",
+    "workstation restore",
+    "backup schedule",
     "pages provision",
     "pages deploy",
     "pages verify",
@@ -600,7 +653,7 @@ test("A machine generates a complete private production profile and reuses trust
   await deploy(await prepareOnce());
   assert.equal(
     (await operations()).slice(before.length),
-    "cf verify\ntunnel ssh\npublic api\npages verify\n",
+    "cf verify\ntunnel ssh\npublic api\nworkstation restore\nbackup schedule\npages verify\n",
   );
   await publish(join(creds, "FV_SSH_HOST_PUBLIC_KEY"), keys.operatorPublic);
   await assert.rejects(prepareOnce, /host key/);

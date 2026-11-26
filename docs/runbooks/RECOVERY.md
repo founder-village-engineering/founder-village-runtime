@@ -8,7 +8,7 @@
 
 Targets: PostgreSQL RPO ≤ 300 seconds, full-runtime RTO ≤ 4 hours, object/config RPO ≤ 24 hours. These require measurement on the actual provider, workload, credentials, and network.
 
-The database image includes pgvector and pinned pgBackRest. PostgreSQL archives WAL continuously. Local fixtures use an encrypted local repository; remote environments use encrypted S3 storage. A daily full-backup systemd timer is the conservative implementation default; `backup capture --kind diff` supports an operator-selected differential cadence. Keep the full dependency chain for the configured 30-day window.
+The database image includes pgvector and pinned pgBackRest. PostgreSQL archives WAL continuously. In workstation mode the VM writes an encrypted pgBackRest repository to its private backup volume. Local fixtures also use an encrypted local repository. Previously enrolled S3 runtimes continue to archive to their configured bucket. A daily full-backup systemd timer is the conservative implementation default; `backup capture --kind diff` supports an operator-selected differential cadence. Keep the full dependency chain for the configured 30-day window.
 
 ```sh
 bin/fv backup capture --kind full
@@ -18,11 +18,40 @@ bin/fv backup restore-drill
 
 The physical backup includes all registered application databases, Hasura metadata, the control database, roles, and extension state. The isolated drill creates and archives a fresh named WAL recovery point, starts a fresh recovery container using the authenticated source settings, verifies replay reached that point, and checks the vector extension, migration state, and queries in every application database. It does not start restored workers, connect restored services to production, or replace a serving data volume. Its receipt explicitly records `clean_host: false`.
 
-The five-minute database target concerns the active offsite WAL repository. An immutable mirror taken on the daily backup cadence has a separate, up-to-one-day fallback window; configure and verify a tighter mirror cadence if that failure mode also requires five-minute protection.
+## Workstation copies
 
-Remote capture additionally builds an age-encrypted configuration/secret bundle and runs independently credentialed immutable replication. Objects are streamed through a bounded temporary file, SHA-256 checked at the destination, version recorded, and retained in compliance mode. The chosen S3 provider must support the required operations; incompatibility fails the operation. Local-copy receipts never claim offsite or immutable-copy proof.
+The workstation pulls the completed capture into the checkout’s private `backups/` directory. Each snapshot contains the encrypted pgBackRest repository, archived WAL through the capture’s named restore point, the signed recovery bundle and its encrypted audit archive. Git and the release packager exclude the directory. The recovery identity and independently escrowed verifier stay in the private workstation identity directory.
 
-Remote `backup verify` also requires completion of the immutable copy for the exact authenticated backup receipt. A partial replication blocks promotion until a completed capture passes verification.
+```sh
+npm run backup:pull
+npm run backup:verify
+npm run backup:schedule -- --plan
+```
+
+Production bootstrap installs the scheduled pull on the Mac after verifying the sealed SSH tunnel. Pulls authenticate the descriptor, check the streamed byte count and SHA-256, and return the saved bytes to a network-isolated restore drill. Inspect the time of the last successful capture and pull when assessing exposure to a VM loss. With daily captures the workstation can be a day or more behind, including time the Mac is offline. The five-minute WAL target on the running host does not establish a five-minute off-host recovery point. A clean-host rebuild requires a separate exercise.
+
+If the original VM is lost, choose the snapshot directory under `backups/` for the recovery point you want. Set `backup_id` to its directory name and use the independently retained workstation identity. Run the following in the matching Founder Village checkout. These steps authenticate one saved generation offline and unpack it into a new private directory.
+
+```sh
+set -eu
+umask 077
+npm run backup:verify -- "$backup_id"
+restore_dir=$(mktemp -d)
+tar -xf "backups/$backup_id/snapshot.tar" -C "$restore_dir" repository recovery
+production_home=${FV_PRODUCTION_HOME:-"$HOME/.local/share/founder-village/production"}
+age_identity_file=${FV_BACKUP_AGE_IDENTITY_FILE:-"$production_home/identity/recovery.agekey"}
+age -d -i "$age_identity_file" -o "$restore_dir/backup-verifier" "$production_home/identity/backup-verifier.age"
+export BACKUP_HMAC_KEY_FILE="$restore_dir/backup-verifier"
+node --import tsx scripts/verify-recovery.ts "$restore_dir/recovery"
+```
+
+The `repository/` directory is the encrypted pgBackRest repository. Mount it read-only at `/var/lib/pgbackrest` on the isolated replacement. Recover the matching catalog with the verified `recovery/` bundle and age identity. Use the catalog’s pgBackRest cipher passphrase and the named recovery point in the authenticated `backup-receipt.json` for a restore into a fresh PostgreSQL data directory. Keep the verifier and decrypted catalog in protected operator custody.
+
+## Legacy S3 copies
+
+In S3 mode, remote capture additionally builds an age-encrypted configuration/secret bundle and runs independently credentialed immutable replication. Objects are streamed through a bounded temporary file, SHA-256 checked at the destination, version recorded, and retained in compliance mode. The chosen S3 provider must support the required operations; incompatibility fails the operation. Local-copy receipts never claim offsite or immutable-copy proof.
+
+In S3 mode, remote `backup verify` also requires completion of the immutable copy for the exact authenticated backup receipt. A partial replication blocks promotion until a completed capture passes verification.
 
 Recovery bundles contain an authenticated exact artifact set. Verification rejects extras, omissions, altered sizes/checksums, duplicate names, symlinks, and unsafe names. Preserve the backup-HMAC verification key independently of the backup repository, along with the age private identity. The recipient alone does not authenticate the sender.
 
@@ -35,9 +64,21 @@ node --import tsx scripts/restore-secrets.ts production /protected/recovery-bund
 
 Provide `BACKUP_HMAC_KEY_FILE` from independent custody. Secrets are decrypted and validated before replacing any current catalog. The previous catalog is preserved. For a WireGuard deployment, restore the encrypted server key and peer inventory through the verified artifact procedure before applying the interface. For a Tunnel SSH deployment, recover or rotate the connector credential and verify Access, host keys, and the public-inbound firewall proof before reopening traffic.
 
+## Workstation audit recovery
+
+In workstation backup mode the audit worker verifies the database hash chain and records signed checkpoints. Each recovery bundle includes `audit.jsonl.age`, a full ledger export from one PostgreSQL snapshot, including entries since the latest checkpoint. The export authenticates the environment, backup fingerprint, records and count with the enrolled audit HMAC key and encrypts them for the workstation's recovery recipient. The workstation copy retains this archive with that recovery point. S3 deployments continue to write signed segments to the configured audit bucket.
+
+After verifying the recovery bundle, use its backup fingerprint and supply `AUDIT_HMAC_KEY_FILE` from the workstation's independent custody. Verification streams the records and prints only a count.
+
+```sh
+set -o pipefail
+age -d -i "$age_identity_file" "$recovery_bundle/audit.jsonl.age" |
+  FV_ENV=production node --import tsx scripts/verify-audit-snapshot.ts "$backup_fingerprint"
+```
+
 ## Vaultwarden
 
-For a manifest with `vaultwarden_domain` enabled, the backup timer briefly stops Vaultwarden to archive the SQLite database, signing keys, attachments and sends together. The archive streams through age encryption into `vaultwarden-data.tar.age` and the runtime restarts Vaultwarden. The recovery manifest authenticates the archive and the immutable copy records its SHA-256 and object version. The transfer supports encrypted vault archives up to 4 GiB. The Vaultwarden admin hash can be projected again from independent operator custody.
+For a manifest with `vaultwarden_domain` enabled, the backup timer briefly stops Vaultwarden to archive the SQLite database, signing keys, attachments and sends together. The archive streams through age encryption into `vaultwarden-data.tar.age` and the runtime restarts Vaultwarden. The recovery manifest authenticates the archive. Workstation mode includes it in the transferred snapshot. S3 mode records the SHA-256 and version of the object in the immutable mirror. The transfer supports encrypted vault archives up to 4 GiB. The Vaultwarden admin hash can be projected again from independent operator custody.
 
 On an isolated replacement host, verify the recovery manifest using the independent backup verifier. As the recovery operator, decrypt into a new owner-only directory using the escrowed age identity.
 

@@ -26,6 +26,7 @@ test("only safe source paths can enter the workstation build snapshot", () => {
   for (const path of [
     "config/production.private.json",
     ".state/owner.json",
+    "backups/production/snapshot.tar",
     ".git/config",
     ".git-credentials",
     "secrets/access-token",

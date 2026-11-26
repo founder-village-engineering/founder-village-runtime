@@ -51,8 +51,7 @@ pub fn promote_installed(root: &Path, c: &Config, revision: &str) -> Result<()> 
         "candidate configuration crosses target boundary"
     );
     let previous_cfg = fs::read(&cfg)?;
-    // Before changing any existing runtime selection, verify the running data
-    // has its independently validated immutable backup.
+    // Verify the running data under its current recovery policy before switching.
     super::backup::verify(root, c)?;
     let attempt = (|| -> Result<()> {
         switch_host(root, &cfg, Some(revision), &fs::read(candidate_path)?)?;
@@ -61,7 +60,12 @@ pub fn promote_installed(root: &Path, c: &Config, revision: &str) -> Result<()> 
         }
         if c.vaultwarden_domain.is_none() && candidate.vaultwarden_domain.is_some() {
             super::vaultwarden::start(root, &candidate)?;
-            super::backup::capture(root, &candidate, "full")?;
+            if !candidate.backup.workstation() || super::backup::verify(root, &candidate).is_err() {
+                super::backup::capture(root, &candidate, "full")?;
+                // Workstation mode leaves an export covering the new vault even when this
+                // activation rolls back. A retry uses that exact snapshot after its return.
+                super::backup::verify(root, &candidate)?;
+            }
         }
         let id = prepare(root, &candidate, revision, &manifest.image)?;
         deploy(root, &candidate, &id)

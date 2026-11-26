@@ -3,9 +3,11 @@ import { createHmac } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import { secret } from "../packages/database/index.ts";
+import { pool, secret } from "../packages/database/index.ts";
+import { encryptAuditSnapshot } from "./audit-snapshot.ts";
 import {
   recoveryArtifact,
+  auditSnapshot,
   recoveryVerifyTimeout,
 } from "./recovery-artifact.ts";
 const exec = promisify(execFile),
@@ -38,6 +40,26 @@ if (!/^age1[a-z0-9]{40,}$/.test(recipient))
   throw new Error("independent recovery recipient required");
 if (!(await lstat(`.state/${env}.env`)).isFile())
   throw new Error("unsafe runtime catalog");
+const configFile = `.state/${env}/runtime.json`;
+if (!(await lstat(configFile)).isFile())
+  throw new Error("unsafe runtime manifest");
+const runtime = JSON.parse(await readFile(configFile, "utf8")) as {
+  cloudflare?: { ssh_domain?: string };
+  backup?: { mode?: string };
+};
+if (runtime.backup?.mode === "workstation") {
+  const db = pool("RUNNER_DATABASE_URL");
+  try {
+    await encryptAuditSnapshot(
+      db,
+      id,
+      recipient,
+      path.join(dir, auditSnapshot),
+    );
+  } finally {
+    await db.end();
+  }
+}
 await exec(
   "age",
   ["-r", recipient, "-o", `${dir}/runtime.env.age`, `.state/${env}.env`],
@@ -57,9 +79,6 @@ for (const input of inputs) {
     flag: "wx",
   });
 }
-const runtime = JSON.parse(await readFile(`${dir}/runtime.json`, "utf8")) as {
-  cloudflare?: { ssh_domain?: string };
-};
 const wireguard = [
   ["wireguard.key", "wireguard.key.age"],
   ["peers.json", "wireguard-peers.json.age"],

@@ -270,7 +270,12 @@ export async function deploy(p: Production) {
     cli = "bin/fv --config " + remoteConfig;
   const ipv4 = p.manifest.provider.existing_server.ipv4,
     tunnel = p.manifest.cloudflare.ssh_domain;
-  const ssh = async (host: string, command: string, input?: string) => {
+  const ssh = async (
+    host: string,
+    command: string,
+    input?: string,
+    timeout = 3600_000,
+  ) => {
     const options = await pinnedSshOptions(
       { host, knownHosts: p.bootstrap.knownHosts },
       ipv4,
@@ -281,11 +286,16 @@ export async function deploy(p: Production) {
       [...options, "-i", p.keys.operator, "-l", "fv", host, command],
       host === tunnel ? machine.env : {},
       input,
-      3600_000,
+      timeout,
     );
   };
-  const hostRun = (host: string, command: string, input?: string) =>
-    ssh(host, "cd /opt/founder-village && sudo -n " + command, input);
+  const hostRun = (
+    host: string,
+    command: string,
+    input?: string,
+    timeout?: number,
+  ) =>
+    ssh(host, "cd /opt/founder-village && sudo -n " + command, input, timeout);
   const provision = (action: string, ...extra: string[]) =>
     run(
       "bin/fv",
@@ -297,6 +307,39 @@ export async function deploy(p: Production) {
   const cfStep = (action: string) =>
     node("cloudflare-bootstrap", [file, action], cf, 600_000);
   const probeSsh = () => ssh(tunnel, "sudo -n true");
+  const workstationBackup = p.manifest.backup.mode === "workstation";
+  const restoreTimeout = p.manifest.backup.rto_seconds * 1000 + 600_000;
+  const captureBackup = (host: string) =>
+    hostRun(host, cli + " backup capture", undefined, 2 * 3600_000);
+  const backupEnv = {
+    FV_PRODUCTION_HOME: p.home,
+    FV_BACKUP_AGE_IDENTITY_FILE: process.env.FV_BACKUP_AGE_IDENTITY_FILE,
+    FV_VAULTWARDEN_BINDING_FILE: process.env.FV_VAULTWARDEN_BINDING_FILE,
+    CREDENTIALS_DIRECTORY: process.env.CREDENTIALS_DIRECTORY,
+  };
+  const pullBackup = () =>
+    node(
+      "workstation-backup",
+      ["pull", "--deployment-route"],
+      backupEnv,
+      4 * 3600_000 + restoreTimeout,
+    );
+  const installBackupSchedule = () =>
+    node("workstation-backup-install", [], backupEnv);
+  const snapshotId = async (host: string) =>
+    z
+      .object({ backup: z.string().regex(/^[a-f0-9]{64}$/) })
+      .parse(JSON.parse(await hostRun(host, cli + " backup export-info")))
+      .backup;
+  const verifyWorkstationRecovery = async (host: string) => {
+    const id = await snapshotId(host).catch(async () => {
+      await captureBackup(host);
+      return snapshotId(host);
+    });
+    await pullBackup();
+    await hostRun(host, cli + " backup verify");
+    return id;
+  };
   const firewall = async () =>
     z
       .object({
@@ -330,42 +373,85 @@ export async function deploy(p: Production) {
       900_000,
     );
   const receipt = join(p.home, "deployment.json");
-  const desired = (manifest: typeof p.manifest) =>
-    json({
-      runtime: p.revision,
+  const runtimeReceipt = join(p.home, "runtime-deployment.json");
+  const runtimeState = (manifest: typeof p.manifest) => ({
+    runtime: p.revision,
+    settings: digest(
+      json([
+        manifest,
+        p.runtime,
+        cf.ACCESS_ADMIN_EMAILS,
+        cf.ACCESS_SSH_EMAILS,
+        machine.id,
+      ]),
+    ),
+  });
+  const desired = (manifest: typeof p.manifest) => {
+    const state = runtimeState(manifest);
+    return json({
+      runtime: state.runtime,
       frontend: frontend.revision,
-      settings: digest(
-        json([
-          manifest,
-          p.runtime,
-          cf.ACCESS_ADMIN_EMAILS,
-          cf.ACCESS_SSH_EMAILS,
-          machine.id,
-        ]),
-      ),
+      settings: state.settings,
     });
+  };
+  const publishPages = async (manifest: typeof p.manifest) => {
+    for (const action of ["provision", "deploy", "verify"]) {
+      await stage("Founder Village Pages " + action + " failed.", () =>
+        pages(action),
+      );
+    }
+    await publish(receipt, desired(manifest), true);
+    console.log(
+      "Verified production Pages deployment and registered frontend origins.",
+    );
+  };
   try {
     await publish(file, json(p.manifest));
-    if (
+    const pagesCurrent =
       p.sealed &&
       (await exists(receipt)) &&
-      (await privateText(receipt)) === desired(p.manifest)
-    ) {
+      (await privateText(receipt)) === desired(p.manifest);
+    const runtimeCurrent =
+      p.sealed &&
+      (await exists(runtimeReceipt)) &&
+      (await privateText(runtimeReceipt)) === json(runtimeState(p.manifest));
+    if (pagesCurrent || runtimeCurrent) {
+      let healthy = false;
       try {
         await firewall();
         await cfStep("verify");
         await probeSsh();
         await hostRun(tunnel, cli + " release verify");
         await publicRuntime(p);
-        await pages("verify");
-        console.log(
-          "Verified the existing production deployment and public firewall.",
-        );
-        return false;
+        healthy = true;
       } catch {
         console.log(
-          "The deployment needs reconciliation after live verification.",
+          "Live runtime verification failed. Reconciling the deployment.",
         );
+      }
+      if (healthy) {
+        if (workstationBackup) {
+          await stage("Workstation backup verification failed.", () =>
+            verifyWorkstationRecovery(tunnel),
+          );
+          await stage(
+            "Workstation backup schedule installation failed.",
+            installBackupSchedule,
+          );
+        }
+        if (pagesCurrent) {
+          try {
+            await pages("verify");
+            console.log("Verified the existing runtime and Pages deployment.");
+            return false;
+          } catch {
+            console.log(
+              "Reconciling the Pages deployment after public verification failed.",
+            );
+          }
+        }
+        await publishPages(p.manifest);
+        return false;
       }
     }
     await stage(
@@ -439,14 +525,22 @@ export async function deploy(p: Production) {
         );
       },
     );
-    await stage(
-      "Offsite backup, immutable read-back or isolated restore failed.",
+    const verifiedSnapshot = await stage(
+      "Backup capture, independent copy verification or isolated restore failed.",
       async () => {
+        if (workstationBackup) {
+          return verifyWorkstationRecovery(route);
+        }
         await hostRun(route, cli + " backup verify").catch(() =>
-          hostRun(route, cli + " backup capture"),
+          captureBackup(route),
         );
         await hostRun(route, cli + " backup verify");
-        await hostRun(route, cli + " backup restore-drill");
+        await hostRun(
+          route,
+          cli + " backup restore-drill",
+          undefined,
+          restoreTimeout,
+        );
       },
     );
     await stage(
@@ -457,10 +551,24 @@ export async function deploy(p: Production) {
           p.revision +
           "/target/release/fv --config " +
           remoteConfig;
-        await hostRun(
-          route,
-          candidate + " release promote --revision " + p.revision,
-        );
+        const promote = () =>
+          hostRun(
+            route,
+            candidate + " release promote --revision " + p.revision,
+          );
+        try {
+          await promote();
+        } catch (error) {
+          // Enabling the vault on an existing runtime can create a new recovery
+          // point during activation. Restore the expanded capture before retrying.
+          if (
+            !verifiedSnapshot ||
+            (await snapshotId(route)) === verifiedSnapshot
+          )
+            throw error;
+          await verifyWorkstationRecovery(route);
+          await promote();
+        }
         await hostRun(route, cli + " doctor");
         await hostRun(
           route,
@@ -502,15 +610,14 @@ export async function deploy(p: Production) {
     console.log(
       "Verified serving revision, protected admin, machine SSH and closed public ingress.",
     );
-    for (const action of ["provision", "deploy", "verify"]) {
-      await stage("Founder Village Pages " + action + " failed.", () =>
-        pages(action),
+    // A failed Pages upload can now retry against this exact healthy runtime.
+    await publish(runtimeReceipt, json(runtimeState(live)), true);
+    if (workstationBackup)
+      await stage(
+        "Workstation backup schedule installation failed.",
+        installBackupSchedule,
       );
-    }
-    await publish(receipt, desired(live), true);
-    console.log(
-      "Verified production Pages deployment and registered frontend origins.",
-    );
+    await publishPages(live);
     return json(p.manifest) !== json(live);
   } finally {
     await rm(temp, { recursive: true, force: true });

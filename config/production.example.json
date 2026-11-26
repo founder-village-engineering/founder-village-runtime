@@ -33,6 +33,7 @@
     "cf_sha256": ""
   },
   "backup": {
+    "mode": "workstation",
     "retention_days": 30,
     "rpo_seconds": 300,
     "rto_seconds": 14400,

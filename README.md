@@ -138,4 +138,4 @@ The production example describes a Helsinki CAX11 on Ubuntu 26.04 ARM64. The pri
 - [Application onboarding](docs/runbooks/APPLICATIONS.md)
 - [Incident response](docs/runbooks/INCIDENTS.md)
 
-Production configuration is explicit and fails closed when required inputs are absent. Account/zone IDs, administrator identity, provider credentials, immutable storage custody, actual restore times, and deployment status are never invented by local fixtures. No Git publication or production deployment is implied by building this repository.
+Production configuration is explicit and fails closed when required inputs are absent. Account/zone IDs, administrator identity, provider credentials, independent backup custody, actual restore times, and deployment status are never invented by local fixtures. No Git publication or production deployment is implied by building this repository.

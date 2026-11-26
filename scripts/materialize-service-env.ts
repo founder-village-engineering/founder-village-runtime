@@ -21,6 +21,7 @@ export function scopedServiceEnvironments(vars: Record<string, string>) {
     "CF_READ_TOKEN",
     "CF_WRITE_TOKEN",
     "AUDIT_HMAC_KEY",
+    "BACKUP_MODE",
     "AUDIT_REGION",
     "AUDIT_ENDPOINT",
     "AUDIT_ACCESS_KEY",

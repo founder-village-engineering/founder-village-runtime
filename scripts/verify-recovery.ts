@@ -3,7 +3,11 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
 import { secret } from "../packages/database/index.ts";
-import { recoveryArtifact, vaultwardenArchive } from "./recovery-artifact.ts";
+import {
+  auditSnapshot,
+  recoveryArtifact,
+  vaultwardenArchive,
+} from "./recovery-artifact.ts";
 if (!process.argv[2]) throw new Error("recovery directory required");
 const dir = path.resolve(process.argv[2]);
 const directoryStat = await lstat(dir);
@@ -49,6 +53,7 @@ const body = z
             "wireguard.key.age",
             "wireguard-peers.json.age",
             vaultwardenArchive,
+            auditSnapshot,
           ]),
           size: z.number().int().nonnegative(),
           sha256: z.string().regex(/^[a-f0-9]{64}$/),
@@ -89,6 +94,9 @@ if (body.environment !== "local") {
       environment: z.literal(body.environment),
       cloudflare: z.object({ ssh_domain: z.string().min(1).nullish() }),
       vaultwarden_domain: z.string().min(1).nullish(),
+      backup: z
+        .object({ mode: z.enum(["s3", "workstation"]).optional() })
+        .optional(),
     })
     .parse(JSON.parse(await readFile(path.join(dir, "runtime.json"), "utf8")));
   const wireguard = ["wireguard.key.age", "wireguard-peers.json.age"];
@@ -102,6 +110,11 @@ if (body.environment !== "local") {
     Boolean(config.vaultwarden_domain) !== actual.includes(vaultwardenArchive)
   )
     throw new Error("Vaultwarden recovery artifact-set mismatch");
+  if (
+    (config.backup?.mode === "workstation") !==
+    actual.includes(auditSnapshot)
+  )
+    throw new Error("audit recovery artifact-set mismatch");
 }
 console.log(
   JSON.stringify({

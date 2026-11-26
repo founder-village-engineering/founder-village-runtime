@@ -440,14 +440,11 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
         e["MIGRATION_FOUNDER_VILLAGE_DATABASE_URL"].clone(),
     );
     private_write(&dir.join("postgres/init.sql"), sql.as_bytes())?;
+    let posix_repo = c.environment == "local" || c.backup.workstation();
     let mut pgbackrest = format!(
         "[global]\nrepo1-type={}\nrepo1-path={}\nrepo1-cipher-type=aes-256-cbc\nrepo1-cipher-pass={}\nrepo1-retention-full-type=time\nrepo1-retention-full={}\nlog-level-console=warn\nstart-fast=y\nprocess-max=2\n[main]\npg1-path=/var/lib/postgresql/data\npg1-socket-path=/var/run/postgresql\n",
-        if c.environment == "local" {
-            "posix"
-        } else {
-            "s3"
-        },
-        if c.environment == "local" {
+        if posix_repo { "posix" } else { "s3" },
+        if posix_repo {
             "/var/lib/pgbackrest"
         } else {
             "/founder-village"
@@ -455,7 +452,7 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
         e["BACKUP_CIPHER_PASS"],
         c.backup.retention_days
     );
-    if c.environment != "local" {
+    if !posix_repo {
         ensure!(
             e.contains_key("BACKUP_S3_KEY") && e.contains_key("BACKUP_S3_SECRET"),
             "backup credentials required"
@@ -516,6 +513,11 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
         "ROOT_ADMIN_ACTORS".into(),
         serde_json::to_string(&c.auth.root_actors)?,
     );
+    if c.backup.workstation() {
+        e.insert("BACKUP_MODE".into(), "workstation".into());
+    } else {
+        e.remove("BACKUP_MODE");
+    }
     e.insert("BACKUP_S3_ENDPOINT".into(), c.backup.s3_endpoint.clone());
     e.insert("BACKUP_S3_BUCKET".into(), c.backup.bucket.clone());
     e.insert("BACKUP_S3_REGION".into(), c.backup.region.clone());

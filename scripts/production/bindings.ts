@@ -9,6 +9,9 @@ export const hostRequired = [
   "CF_READ_TOKEN",
   "CF_WRITE_TOKEN",
   "OIDC_MFA_ACR",
+] as const;
+
+export const s3StorageBindings = [
   "BACKUP_S3_ENDPOINT",
   "BACKUP_S3_REGION",
   "BACKUP_S3_BUCKET",
@@ -57,6 +60,7 @@ export const runtimePolicy = [
 export const distributedBindings = [
   ...operatorRequired,
   ...hostRequired,
+  ...s3StorageBindings,
   ...hostOptional,
   ...runtimePolicy,
   "FV_CF_TOKEN_ISSUER",

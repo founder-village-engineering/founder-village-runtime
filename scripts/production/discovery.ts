@@ -5,8 +5,10 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { get } from "node:https";
+import { homedir } from "node:os";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { boundedJson } from "../../packages/observability/http.ts";
 import {
@@ -19,6 +21,7 @@ import {
   hostRequired,
   operatorRequired,
   runtimePolicy,
+  s3StorageBindings,
 } from "./bindings.ts";
 import {
   BootstrapError,
@@ -448,7 +451,33 @@ export async function bootstrapCidr() {
 const cloudflareGrants = new Set<string>(cloudflareGrantNames);
 const invalidCredential = /[\r\n\0]/;
 
-export async function credentialPreflight(read = credential) {
+const backupMode = z.enum(["workstation", "s3"]).default("s3");
+export type BackupMode = z.output<typeof backupMode>;
+
+export async function productionBackupMode(
+  root = fileURLToPath(new URL("../../", import.meta.url)),
+  home = process.env.FV_PRODUCTION_HOME ??
+    join(homedir(), ".local/share/founder-village/production"),
+): Promise<BackupMode> {
+  // Preserve an enrolled runtime's recovery destination across release upgrades.
+  const enrolled = join(home, "current", "production.private.json");
+  const config = (await exists(enrolled))
+    ? await privateText(enrolled)
+    : await readFile(join(root, "config/production.example.json"), "utf8");
+  return z
+    .object({ backup: z.object({ mode: backupMode }) })
+    .parse(JSON.parse(config)).backup.mode;
+}
+
+function requiredHostBindings(mode: BackupMode) {
+  return mode === "s3" ? [...hostRequired, ...s3StorageBindings] : hostRequired;
+}
+
+export async function credentialPreflight(
+  read = credential,
+  mode?: BackupMode,
+) {
+  const destination = mode ?? (await productionBackupMode());
   async function inspect(name: string) {
     try {
       const value = await read(name);
@@ -464,7 +493,10 @@ export async function credentialPreflight(read = credential) {
   const delegated: string[] = [];
   const missing: string[] = [];
   const invalid: string[] = cloudflareIssuer === "invalid" ? [issuerName] : [];
-  for (const name of [...operatorRequired, ...hostRequired]) {
+  for (const name of [
+    ...operatorRequired,
+    ...requiredHostBindings(destination),
+  ]) {
     const state = await inspect(name);
     if (state === "mounted") mounted.push(name);
     else if (state === "invalid") invalid.push(name);
@@ -475,6 +507,7 @@ export async function credentialPreflight(read = credential) {
   return {
     credentialProjectionComplete: missing.length === 0 && invalid.length === 0,
     cloudflareIssuer,
+    backupMode: destination,
     mounted,
     delegated,
     missing,
@@ -482,10 +515,14 @@ export async function credentialPreflight(read = credential) {
   };
 }
 
-export async function loadInputs(issued: Record<string, string> = {}) {
+export async function loadInputs(
+  issued: Record<string, string>,
+  mode: BackupMode,
+) {
   const values: Record<string, string> = {};
+  const required = requiredHostBindings(mode);
   for (const name of [
-    ...hostRequired,
+    ...required,
     ...hostOptional,
     ...operatorRequired,
     ...runtimePolicy,
@@ -504,7 +541,7 @@ export async function loadInputs(issued: Record<string, string> = {}) {
       values[name] = value;
     }
   }
-  const missing = [...operatorRequired, ...hostRequired].filter(
+  const missing = [...operatorRequired, ...required].filter(
     (key) => !values[key],
   );
   if (missing.length)
@@ -523,7 +560,7 @@ export async function loadInputs(issued: Record<string, string> = {}) {
         .parse(values[name].split(",").map((s) => s.trim()));
   }
   const host = Object.fromEntries(
-    [...hostRequired, ...hostOptional]
+    [...required, ...hostOptional]
       .filter((k) => values[k])
       .map((k) => [k, values[k]!]),
   );

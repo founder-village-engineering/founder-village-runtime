@@ -10,9 +10,50 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { Readable } from "node:stream";
+import { verifyAuditSnapshot } from "../scripts/verify-audit-snapshot.ts";
+
+test("audit verification requires the exact signed UTF-8 lines and terminal signature", async (t) => {
+  const previous = process.env;
+  process.env = {
+    FV_ENV: "production",
+    AUDIT_HMAC_KEY: randomBytes(32).toString("hex"),
+  };
+  t.after(() => {
+    process.env = previous;
+  });
+  const backup = "b".repeat(64);
+  const payload = [
+    { version: 1, environment: "production", backup },
+    { id: "1", event: "entrada café" },
+    { count: 1, lastId: "1" },
+  ]
+    .map((record) => JSON.stringify(record) + "\n")
+    .join("");
+  const signature = createHmac("sha256", process.env.AUDIT_HMAC_KEY!)
+    .update(payload)
+    .digest("hex");
+  const valid = payload + JSON.stringify({ signature }) + "\n";
+  const bytes = Buffer.from(valid);
+  const split = bytes.indexOf(Buffer.from("é")) + 1;
+  assert.equal(
+    await verifyAuditSnapshot(
+      Readable.from([bytes.subarray(0, split), bytes.subarray(split)]),
+      backup,
+    ),
+    1,
+  );
+  for (const changed of [
+    valid.replace("café", "cafe"),
+    valid.replaceAll("\n", "\r\n"),
+    valid.trimEnd(),
+    payload,
+  ])
+    await assert.rejects(verifyAuditSnapshot(Readable.from([changed]), backup));
+});
 test("recovery verifier authenticates exact artifacts and rejects tampering, extras and links", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "fv-recovery-")),
     exec = promisify(execFile),
@@ -154,6 +195,34 @@ test("recovery verifier authenticates exact artifacts and rejects tampering, ext
     await writeFile(path.join(dir, vaultCopy.name), vaultArchive);
     await assert.rejects(verify, /recovery artifact altered/);
     await unlink(path.join(dir, vaultCopy.name));
+    const workstationConfig = Buffer.from(
+      JSON.stringify({
+        ...JSON.parse(runtime.toString()),
+        backup: { mode: "workstation" },
+      }),
+    );
+    await writeFile(path.join(dir, "runtime.json"), workstationConfig);
+    const workstation = {
+      ...tunneled,
+      artifacts: tunneled.artifacts.map((entry) =>
+        entry.name === "runtime.json"
+          ? artifact(entry.name, workstationConfig)
+          : entry,
+      ),
+    };
+    await writeManifest(workstation);
+    await assert.rejects(verify, /audit recovery artifact-set mismatch/);
+    const audit = Buffer.from("synthetic encrypted audit snapshot");
+    const auditCopy = artifact("audit.jsonl.age", audit);
+    await writeFile(path.join(dir, auditCopy.name), audit);
+    await writeManifest({
+      ...workstation,
+      artifacts: [...workstation.artifacts, auditCopy],
+    });
+    await verify();
+    await writeFile(path.join(dir, auditCopy.name), "changed");
+    await assert.rejects(verify, /recovery artifact altered/);
+    await unlink(path.join(dir, auditCopy.name));
     await writeFile(path.join(dir, "runtime.json"), runtime);
     const loneKey = {
       name: "wireguard.key.age",

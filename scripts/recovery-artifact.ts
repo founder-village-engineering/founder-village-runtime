@@ -4,6 +4,7 @@ import { lstat } from "node:fs/promises";
 import path from "node:path";
 
 export const vaultwardenArchive = "vaultwarden-data.tar.age";
+export const auditSnapshot = "audit.jsonl.age";
 export const recoveryVerifyTimeout = 120_000;
 
 export async function recoveryArtifact(directory: string, name: string) {
@@ -11,7 +12,10 @@ export async function recoveryArtifact(directory: string, name: string) {
     throw new Error("unsafe recovery artifact name");
   const file = path.join(directory, name);
   const stat = await lstat(file);
-  const maximum = name === vaultwardenArchive ? 4 * 1024 ** 3 : 1024 ** 2;
+  const maximum =
+    name === vaultwardenArchive || name === auditSnapshot
+      ? 4 * 1024 ** 3
+      : 1024 ** 2;
   if (!stat.isFile() || stat.size > maximum)
     throw new Error("unsafe recovery artifact");
   const hash = createHash("sha256");

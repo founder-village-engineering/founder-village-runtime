@@ -48,8 +48,48 @@ export function accessPolicies(
   return { workforce, machine, policies };
 }
 
+function machineEnv(service: z.infer<typeof issued>) {
+  return {
+    TUNNEL_SERVICE_TOKEN_ID: service.client_id,
+    TUNNEL_SERVICE_TOKEN_SECRET: service.client_secret,
+  };
+}
+
 // The name binds recovery of an interrupted creation to this account, VM and
 // operator identity. The token grants access only when attached to the SSH app.
+async function machineRecord(
+  home: string,
+  account: string,
+  serverId: number,
+  operatorPublic: string,
+) {
+  const key = digest(json([account, serverId, operatorPublic])).slice(0, 24);
+  const name = "fv-production-ssh-" + key;
+  const file = join(home, "access-" + key + ".json");
+  const stored = (await exists(file))
+    ? issued.parse(JSON.parse(await privateText(file)))
+    : undefined;
+  if (stored && (stored.name !== name || stored.enabled === false))
+    throw new Error("Stored service identity drift");
+  return { key, name, file, stored };
+}
+
+export async function savedMachineAccess(
+  home: string,
+  account: string,
+  serverId: number,
+  operatorPublic: string,
+) {
+  const { stored } = await machineRecord(
+    home,
+    account,
+    serverId,
+    operatorPublic,
+  );
+  if (!stored) throw new Error("No enrolled SSH service token");
+  return { env: machineEnv(stored), expiresAt: Date.parse(stored.expires_at) };
+}
+
 export async function machineAccess(
   home: string,
   account: string,
@@ -57,13 +97,13 @@ export async function machineAccess(
   operatorPublic: string,
   api: CfRequest,
 ) {
-  const key = digest(json([account, serverId, operatorPublic])).slice(0, 24);
-  const name = "fv-production-ssh-" + key;
+  const { key, name, file, stored } = await machineRecord(
+    home,
+    account,
+    serverId,
+    operatorPublic,
+  );
   const url = "accounts/" + account + "/access/service_tokens";
-  const file = join(home, "access-" + key + ".json");
-  const stored = (await exists(file))
-    ? issued.parse(JSON.parse(await privateText(file)))
-    : undefined;
   const matches = z
     .array(service)
     .max(1)
@@ -74,9 +114,7 @@ export async function machineAccess(
     throw new Error("Conflicting existing service token");
   if (
     (stored &&
-      (stored.name !== name ||
-        remote?.id !== stored.id ||
-        remote.client_id !== stored.client_id)) ||
+      (remote?.id !== stored.id || remote.client_id !== stored.client_id)) ||
     (remote && (remote.name !== name || remote.enabled === false))
   )
     throw new Error("Service identity drift");
@@ -94,14 +132,15 @@ export async function machineAccess(
       throw new Error("Invalid token renewal");
     remote = refreshed;
   }
-  if (stored)
-    return {
-      id: stored.id,
-      env: {
-        TUNNEL_SERVICE_TOKEN_ID: stored.client_id,
-        TUNNEL_SERVICE_TOKEN_SECRET: stored.client_secret,
-      },
-    };
+  if (stored && remote) {
+    if (stored.expires_at !== remote.expires_at)
+      await publish(
+        file,
+        json({ ...stored, expires_at: remote.expires_at }),
+        true,
+      );
+    return { id: stored.id, env: machineEnv(stored) };
+  }
   // A one-time secret can be lost between POST and the durable local write.
   // Recover only the exact identity for a previously persisted creation intent.
   await publish(intent, json({ account, name }));
@@ -122,11 +161,5 @@ export async function machineAccess(
   )
     throw new Error("Unexpected service token response");
   await publish(file, json(result));
-  return {
-    id: result.id,
-    env: {
-      TUNNEL_SERVICE_TOKEN_ID: result.client_id,
-      TUNNEL_SERVICE_TOKEN_SECRET: result.client_secret,
-    },
-  };
+  return { id: result.id, env: machineEnv(result) };
 }

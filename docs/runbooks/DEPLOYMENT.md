@@ -35,7 +35,7 @@ node --import tsx scripts/remote-bootstrap.ts config/bootstrap.private.json
 runtime_revision=$(jq -er .revision "$release_dir/source-manifest.json")
 ```
 
-Use that revision in an authenticated SSH session on the host. A subsequent install stages the generation alongside the active release. The runtime starts from the locally loaded image IDs. Promotion verifies backup and immutable-copy readiness, runs additive migrations, exercises the inactive API and admin routes, and switches the proxy only after the expected revision passes.
+Use that revision in an authenticated SSH session on the host. A subsequent install stages the generation alongside the active release. The runtime starts from the locally loaded image IDs. Promotion verifies an independently checked backup and its isolated restore, runs additive migrations, exercises the inactive API and admin routes, and switches the proxy only after the expected revision passes.
 
 ```sh
 cd /opt/founder-village

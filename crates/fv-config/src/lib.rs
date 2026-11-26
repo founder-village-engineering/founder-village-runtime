@@ -206,6 +206,9 @@ pub const TUNNEL_SSH_SUBNET: &str = "172.30.248.0/29";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Backup {
+    // Omitted in existing local and remote manifests; preserve their serialized fingerprints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<BackupMode>,
     pub retention_days: u32,
     pub rpo_seconds: u32,
     pub rto_seconds: u32,
@@ -213,6 +216,17 @@ pub struct Backup {
     pub bucket: String,
     pub region: String,
     pub immutable_copy_confirmed: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackupMode {
+    Workstation,
+    S3,
+}
+impl Backup {
+    pub fn workstation(&self) -> bool {
+        self.mode == Some(BackupMode::Workstation)
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -379,6 +393,16 @@ impl Config {
                 && self.backup.rto_seconds > 0,
             "unsafe recovery targets"
         );
+        if self.backup.workstation() {
+            ensure!(
+                self.environment == "production"
+                    && self.backup.s3_endpoint.is_empty()
+                    && self.backup.bucket.is_empty()
+                    && self.backup.region.is_empty()
+                    && !self.backup.immutable_copy_confirmed,
+                "workstation backups require a production manifest without S3 or immutable storage claims"
+            );
+        }
         for name in &self.cloudflare.managed_names {
             ensure!(
                 direct_subdomain(name, &self.cloudflare.zone_name),
@@ -437,14 +461,15 @@ impl Config {
                 &self.auth.jwks_url,
                 &self.auth.authorization_endpoint,
                 &self.auth.token_endpoint,
-                &self.backup.s3_endpoint,
             ] {
                 ensure!(https_endpoint(u), "HTTPS provider endpoint required");
             }
             ensure!(
                 !self.auth.client_id.is_empty()
                     && !self.auth.audience.is_empty()
-                    && !self.backup.bucket.is_empty(),
+                    && (self.backup.workstation()
+                        || (!self.backup.bucket.is_empty()
+                            && https_endpoint(&self.backup.s3_endpoint))),
                 "identity and backup provider required"
             );
             ensure!(
@@ -459,7 +484,7 @@ impl Config {
                 "frontend OAuth clients must be distinct from the admin client and API audience"
             );
             ensure!(
-                self.backup.immutable_copy_confirmed,
+                self.backup.workstation() || self.backup.immutable_copy_confirmed,
                 "independent immutable backup custody must be configured"
             );
             ensure!(

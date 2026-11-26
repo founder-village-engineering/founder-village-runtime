@@ -92,7 +92,7 @@ enum Cmd {
         id: Option<String>,
     },
     Backup {
-        #[arg(value_parser=["capture","verify","restore-drill"])]
+        #[arg(value_parser=["capture","verify","restore-drill","export-info","export","import-drill"])]
         action: String,
         #[arg(long, default_value = "full")]
         kind: String,
@@ -502,6 +502,9 @@ fn execute() -> Result<()> {
         Cmd::Backup { action, kind } => match action.as_str() {
             "capture" => fv_ops::backup::capture(&root, &c, &kind)?,
             "verify" => fv_ops::backup::verify(&root, &c)?,
+            "export-info" => fv_ops::backup::export_snapshot(&root, &c, false)?,
+            "export" => fv_ops::backup::export_snapshot(&root, &c, true)?,
+            "import-drill" => fv_ops::backup::import_drill(&root, &c)?,
             _ => fv_ops::backup::restore_drill(&root, &c)?,
         },
         Cmd::VaultwardenInvite => {

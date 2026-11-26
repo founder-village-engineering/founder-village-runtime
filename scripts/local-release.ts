@@ -123,6 +123,7 @@ export function permittedSourcePath(path: string): boolean {
   const parts = path.split("/");
   return (
     /^[A-Za-z0-9_./-]+$/.test(path) &&
+    parts[0]?.toLowerCase() !== "backups" &&
     parts.every(
       (part) =>
         part &&
