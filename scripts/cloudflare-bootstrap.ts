@@ -98,6 +98,7 @@ try {
       environment: z.enum(["staging", "production"]),
       api_domain: z.string(),
       admin_domain: z.string(),
+      vaultwarden_domain: z.string().nullish(),
       provider: z.object({
         existing_server: z.object({ ipv4: z.ipv4() }).optional(),
       }),
@@ -125,10 +126,22 @@ try {
     ...(ssh
       ? [{ role: "ssh", hostname: ssh, service: "ssh://fv-operator:22" }]
       : []),
+    ...(config.vaultwarden_domain
+      ? [
+          {
+            role: "vaultwarden",
+            hostname: config.vaultwarden_domain,
+            service: "http://caddy:8080",
+          },
+        ]
+      : []),
   ];
   const names = hosts.map(({ hostname }) => hostname);
-  if (!names.every((name) => config.cloudflare.managed_names.includes(name)))
-    throw new Error("tunnel hostnames must be explicitly managed");
+  if (
+    new Set(names).size !== names.length ||
+    !names.every((name) => config.cloudflare.managed_names.includes(name))
+  )
+    throw new Error("tunnel hostnames must be distinct and explicitly managed");
   if (action === "plan") {
     console.log(
       JSON.stringify(

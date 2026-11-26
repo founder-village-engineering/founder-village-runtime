@@ -177,17 +177,36 @@ export async function publish(file: string, contents: string, replace = false) {
   }
 }
 
-// Credential brokers can project one owner-only file per name (including systemd
-// LoadCredential). No browser session, provider CLI fallback or other project is used.
-export async function credential(name: string): Promise<string | undefined> {
-  const explicit = process.env[name + "_FILE"];
-  const mount =
+export function credentialDirectory() {
+  return (
     process.env.CREDENTIALS_DIRECTORY ??
-    join(homedir(), ".config/founder-village/production/credentials");
-  const file = explicit ?? join(mount, name);
+    join(homedir(), ".config/founder-village/production/credentials")
+  );
+}
+
+export async function projectedCredential(
+  name: string,
+): Promise<string | undefined> {
+  const explicit = process.env[name + "_FILE"];
+  const file = explicit ?? join(credentialDirectory(), name);
   if (explicit || (await exists(file)))
     return (await privateText(file, true)).trim() || undefined;
   return process.env[name]?.trim() || undefined;
+}
+
+let vaultwardenBindings: ReadonlyMap<string, string> = new Map();
+export function useVaultwardenBindings(bindings: ReadonlyMap<string, string>) {
+  vaultwardenBindings = bindings;
+}
+
+export async function credential(name: string): Promise<string | undefined> {
+  const projected = await projectedCredential(name);
+  const stored = vaultwardenBindings.get(name);
+  if (projected && stored && projected !== stored)
+    throw new BootstrapError(
+      "The Vaultwarden binding conflicts with " + name + ".",
+    );
+  return stored ?? projected;
 }
 
 const publicKey = /^ssh-ed25519 ([A-Za-z0-9+/]+={0,2})(?: [^\r\n]+)?$/;

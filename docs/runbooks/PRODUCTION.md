@@ -7,6 +7,7 @@
 | `api.foundervillage.org` | Public API through Cloudflare Tunnel |
 | `admin.foundervillage.org` | Admin through Cloudflare Access and runtime OIDC |
 | `ssh.foundervillage.org` | Operator SSH through a separate Access policy and a pinned host key |
+| `vault.foundervillage.org` | Vaultwarden for the web vault and Bitwarden clients through Cloudflare Tunnel |
 | `founder-village-app.pages.dev` | Primary Cloudflare Pages Direct Upload project |
 | `founder-village-apps.pages.dev` | Additional Pages project serving the same app build |
 | `founderhaus.org`, `foundervillage.org` | Apex domains attached to the primary Pages project |
@@ -22,7 +23,7 @@ npm run --silent production:bootstrap -- preflight
 npm run production:bootstrap -- apply
 ~~~
 
-The preflight reports missing or unreadable machine credentials by name and exits with status 1 when the projection is incomplete. It uses the same credential resolution as the deployer, includes the grants that a delegated Cloudflare issuer can provide, and makes zero provider requests. Use `prepare` for live account, project, identity provider, and storage checks.
+The preflight reports missing or unreadable machine credentials by name and exits with status 1 when the projection is incomplete. It uses the deployer's credential resolver, syncs the selected Vaultwarden collection when configured, and counts grants that a delegated Cloudflare issuer can provide. Use `prepare` for live account, project, identity provider, and storage checks.
 
 The runner enrolls separate operator and release-signing identities, pins the signer outside the release bundle, and creates an age recovery identity, Team encryption key and audit HMAC key. It reuses these on subsequent runs. An existing machine enrollment can project its original identities. Private state defaults to `~/.local/share/founder-village/production`. `FV_PRODUCTION_HOME` selects another persistent, owner-only directory outside the checkout. Include this directory in the workstation's protected backup. The age identity and the encrypted backup-verification key stay off the runtime VM.
 
@@ -30,9 +31,38 @@ The runner enrolls separate operator and release-signing identities, pins the si
 
 `apply` signs the native release, reconciles Tunnel, Access and DNS, enrolls or verifies SSH, and installs the signed runtime. It checks the immutable backup and exercises an isolated restore before promotion. It verifies the external API revision, admin Access challenge and a new pinned SSH session with sudo before closing public SSH. It then verifies the provider firewall and SSH again, publishes one app build to both Pages projects, and checks the app on all four origins. A successful repeat deployment verifies the existing release against its receipt. An interrupted lockdown resumes through the Tunnel.
 
+### Vaultwarden distribution
+
+Vaultwarden is the Founder Village production secret store. For shared access, bind the release runner to a Founder Village organization collection available to the production release operators. The runner reads the secure note named `Founder Village production bindings`. Each hidden field carries one production binding and uses the variable name from preflight.
+
+Use the workstation Vaultwarden and its dedicated release account to stage bindings before public ingress is available. Its data and admin passphrase live under `FV_PRODUCTION_HOME/bootstrap-vault`, with the default workstation directory used when `FV_PRODUCTION_HOME` is unset. The service shares the existing loopback HTTPS edge at `https://vault.fv`. [Local HTTPS setup](LOCAL_DOMAINS.md)
+
+```sh
+npm run production:vault -- workstation
+read -r vault_email
+printf '%s\n' "$vault_email" | npm run production:vault -- workstation-invite
+```
+
+Use the invited address at `https://vault.fv/#/signup`, then configure a separate Bitwarden CLI profile for Founder Village. Save the release binding at `~/.config/founder-village/production/vaultwarden/binding.json` with mode `0600`. Include `server` as `https://vault.fv` or `https://vault.foundervillage.org` and the absolute owner-only `profile` directory. Bind an organization collection with `organizationId` and `collectionId`. For a dedicated release account's own vault, supply its Bitwarden `userId` as `ownerId`. For the workstation vault, set `caFile` to the pinned local CA. The optional `cli` field selects an absolute path to the official Bitwarden CLI.
+
+Unlock the dedicated profile and supply `BW_SESSION` or an owner-only `BW_SESSION_FILE`. A logged-in deployment profile can use an owner-only master password file named by `unlockFile` in the binding. Keep the release signing key, operator SSH key, and the age recovery identity in their independent custody. [Bitwarden CLI connection and unlock](https://bitwarden.com/help/cli/#log-in)
+
+```sh
+npm run production:vault -- import
+npm run production:vault -- status
+npm run production:vault -- project
+npm run --silent production:bootstrap -- preflight
+```
+
+`import` takes the present production bindings from the protected mount or injected environment and the already enrolled workstation identity and provider bindings. It merges missing fields and checks them by reading the item back. `status` reports binding names and counts. `project` writes the vault values as owner-only release files. A configured production bootstrap also reads the vault directly, so the selected release can start without a persistent file projection. Resolve any disagreement between the vault and a projected file before applying.
+
+Keep the workstation Vaultwarden available during initial deployment. After the hosted store is healthy, migrate the vault data using the isolated recovery procedure or import the protected projection into the hosted Founder Village collection. Verify the item by reading it back before switching the runner's binding to `https://vault.foundervillage.org`. [Vaultwarden recovery](RECOVERY.md#vaultwarden)
+
 ### Machine credentials and ownership
 
-The runner reads individual credentials from a protected `NAME_FILE`, a service manager's `CREDENTIALS_DIRECTORY`, the private `~/.config/founder-village/production/credentials/` directory, or an injected variable. Secret values and provider response bodies stay out of release logs.
+The runner can also read individual credentials from a protected `NAME_FILE`, a service manager's `CREDENTIALS_DIRECTORY`, the private `~/.config/founder-village/production/credentials/` directory, or an injected variable. Secret values and provider response bodies stay out of release logs.
+
+With a file projection, use mode `0700` on the directory and mode `0600` on each file. Name each file for the binding printed by preflight and load its value from the approved machine secret broker or independent operator custody. Keep the provider, OIDC, storage and recovery bindings available off-host so they can bootstrap a replacement VM and restore the vault.
 
 | Trust supplied by the deployment platform | What the runner derives or issues |
 | --- | --- |
@@ -52,6 +82,30 @@ Runtime deployments use the organization's existing OIDC provider and S3-compati
 
 An existing provider deployment can project its issued bindings directly. The [input resolver](../../scripts/production/discovery.ts) accepts dedicated DNS read/write, Tunnel provisioning and Pages credentials, OIDC registration outputs, and backup, mirror, audit and optional file-service credentials. The host receives only its runtime allowlist. Existing keys can be enrolled through `FV_OPERATOR_SSH_KEY`, `FV_RELEASE_SIGNING_KEY`, `AGE_RECIPIENT`, `TEAM_CONTENT_KEY` and `AUDIT_HMAC_KEY`.
 
+## Vaultwarden
+
+The production manifest enables the Vaultwarden service and reserves its hostname for the Tunnel. Use `https://vault.foundervillage.org` as the self-hosted Bitwarden server URL. The vault uses its own credentials and two-step login. Its SQLite database, keys, and attachments live in the dedicated vault data directory. The reverse proxy disables caching and blocks the public `/admin` route.
+
+To enroll users, generate a strong admin passphrase in the operator's independent store. Use the pinned Vaultwarden image's `/vaultwarden hash` command and project only the Argon2id output as `VAULTWARDEN_ADMIN_TOKEN_HASH` in the production credentials directory. Bootstrap applies the hash to Vaultwarden's private configuration. [Vaultwarden admin token instructions](https://github.com/dani-garcia/vaultwarden/wiki/Enabling-admin-page#secure-the-admin_token)
+
+From the workstation, run the following in Bash. The passphrase and invite address go through stdin over pinned SSH.
+
+```sh
+vault_workstation="${FV_PRODUCTION_HOME:-$HOME/.local/share/founder-village/production}"
+IFS= read -r -p 'Invite email: ' vault_invitee
+IFS= read -r -s -p 'Vault admin passphrase: ' vault_admin
+printf '\n' >&2
+printf '%s\n%s\n' "$vault_invitee" "$vault_admin" |
+  ssh -F /dev/null -T -o 'ProxyCommand=cloudflared access ssh --hostname %h' \
+    -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null \
+    -o "UserKnownHostsFile=$vault_workstation/current/known_hosts" -o IdentitiesOnly=yes \
+    -i "$vault_workstation/identity/operator" fv@ssh.foundervillage.org \
+    'cd /opt/founder-village && sudo -n bin/fv --config config/production.private.json vaultwarden-invite'
+unset vault_invitee vault_admin
+```
+
+The invited user can open `https://vault.foundervillage.org/#/signup` and register with the invited email address. Confirm enrollment with the user before sharing an organization collection. Public signups and organization invitations are disabled. [Vaultwarden invitation behavior](https://github.com/dani-garcia/vaultwarden/wiki/Disable-registration-of-new-users#invitations-via-the-admin-page) · [Vaultwarden recovery](RECOVERY.md#vaultwarden)
+
 ## Check an existing VM
 
 For a VM already allocated in the dedicated Hetzner project, start with the provider-only example and make a mode-0600 copy at `config/candidate.private.json`. Set the environment, exact server name, and provider server ID and IPv4 from the approved project. For a Helsinki CX23, the provider selection is `hel1`, `cx23` and `amd64`. Supply `root_disk_gb` to verify the VM's reported root disk capacity. Bind any registered keys or other project resources as documented in the provisioning runbook. [Candidate manifest example](../../config/candidate.example.json) · [Hetzner locations](https://docs.hetzner.com/cloud/general/locations/) · [Provisioning and private catalog](PROVISIONING.md)
@@ -66,7 +120,7 @@ bin/fv --config config/candidate.private.json candidate-audit
 
 For individual diagnostics, use the mode-0600 production manifest under the workstation's `current/` directory. The remaining commands illustrate the underlying release steps. [Production manifest template](../../config/production.example.json) · [Provisioning and private catalog](PROVISIONING.md)
 
-Both apex zones must be active in the same Cloudflare account as the Pages project. Use that account for the `foundervillage.org` Tunnel too. Use the Pages reconciliation command for the apex records. Tunnel reconciliation owns the three service subdomains. [Cloudflare Pages custom domains](https://developers.cloudflare.com/pages/configuration/custom-domains/)
+Both apex zones must be active in the same Cloudflare account as the Pages project. Use that account for the `foundervillage.org` Tunnel too. Use the Pages reconciliation command for the apex records. Tunnel reconciliation owns the service subdomains. [Cloudflare Pages custom domains](https://developers.cloudflare.com/pages/configuration/custom-domains/)
 
 The generated manifest holds distinct admin and app OIDC client IDs. The app uses authorization code with PKCE. The plan prints the redirects and browser origins those clients use. [Administrator sign-in](ADMIN_SECURITY.md)
 

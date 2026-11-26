@@ -157,6 +157,19 @@ pub fn capture(root: &Path, c: &Config, kind: &str) -> Result<()> {
     )?;
     let fingerprint = verify_inventory(root, c)?;
     if c.environment != "local" {
+        if c.vaultwarden_domain.is_some() {
+            use std::os::unix::fs::DirBuilderExt;
+            let bundle = root.join(format!(".state/{}/recovery/{fingerprint}", c.environment));
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&bundle)?;
+            ensure!(
+                bundle.symlink_metadata()?.is_dir(),
+                "unsafe recovery bundle directory"
+            );
+            super::vaultwarden::snapshot(root, c, &bundle.join(super::vaultwarden::ARCHIVE))?;
+        }
         let env = super::env(root, c)?;
         fv_host::run(
             "node",
@@ -168,7 +181,7 @@ pub fn capture(root: &Path, c: &Config, kind: &str) -> Result<()> {
             ],
             root,
             &env,
-            120,
+            600,
         )?;
         fv_host::run(
             "node",
@@ -202,6 +215,17 @@ pub fn verify(root: &Path, c: &Config) -> Result<()> {
             mirrored == fingerprint,
             "immutable copy does not cover the current backup receipt"
         );
+        if c.vaultwarden_domain.is_some() {
+            let archive = root
+                .join(format!(".state/{}/recovery/{fingerprint}", c.environment))
+                .join(super::vaultwarden::ARCHIVE);
+            ensure!(
+                archive
+                    .symlink_metadata()
+                    .is_ok_and(|m| m.is_file() && m.len() > 0),
+                "current recovery bundle lacks the Vaultwarden snapshot"
+            );
+        }
     }
     Ok(())
 }

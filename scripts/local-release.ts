@@ -41,6 +41,7 @@ const imageNames = {
   hasura: "fv-hasura",
   caddy: "fv-caddy",
   cloudflared: "fv-cloudflared",
+  vaultwarden: "fv-vaultwarden",
 } as const;
 type ImageRole = keyof typeof imageNames;
 const roles = Object.keys(imageNames) as ImageRole[];
@@ -847,7 +848,12 @@ async function main() {
           role.toUpperCase() + "_IMAGE=" + pins[role],
         );
       }
-      for (const role of ["hasura", "caddy", "cloudflared"] as const) {
+      for (const role of [
+        "hasura",
+        "caddy",
+        "cloudflared",
+        "vaultwarden",
+      ] as const) {
         await docker(["pull", "--platform", platform, pins[role]]);
         imageCommand("image", "tag", pins[role], tags[role]);
       }

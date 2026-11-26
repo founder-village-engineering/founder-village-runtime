@@ -39,6 +39,7 @@ pub fn install_catalog(root: &Path, c: &Config, input: impl std::io::Read) -> Re
         "TEAM_XAI_MODEL",
         "TEAM_XAI_API_KEY",
         "ALERT_WEBHOOK_URL",
+        "VAULTWARDEN_ADMIN_TOKEN_HASH",
     ];
     ensure!(c.environment == "production", "production catalog required");
     let mut bytes = Vec::new();
@@ -261,7 +262,11 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
             ensure!(
                 matches!(
                     key.as_str(),
-                    "OIDC_MFA_ACR" | "TEAM_CONTENT_KEY" | "TEAM_XAI_MODEL" | "TEAM_XAI_API_KEY"
+                    "OIDC_MFA_ACR"
+                        | "TEAM_CONTENT_KEY"
+                        | "TEAM_XAI_MODEL"
+                        | "TEAM_XAI_API_KEY"
+                        | "VAULTWARDEN_ADMIN_TOKEN_HASH"
                 ) || [
                     "CF_",
                     "CLOUDFLARE_",
@@ -307,6 +312,10 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
         ("CF_ZONE_ID", c.cloudflare.zone_id.clone()),
         ("CF_ZONE_NAME", c.cloudflare.zone_name.clone()),
         ("CF_MANAGED_NAMES", c.cloudflare.managed_names.join(",")),
+        (
+            "CF_TUNNEL_NAMES",
+            c.tunnel_domains().collect::<Vec<_>>().join(","),
+        ),
         ("ACCESS_TEAM", c.cloudflare.access_team.clone()),
         ("ACCESS_AUD", c.cloudflare.access_aud.clone()),
         ("OIDC_ISSUER", c.auth.issuer.clone()),
@@ -499,10 +508,6 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
             "ipam":{"config":[{"subnet":fv_config::TUNNEL_SSH_SUBNET,"gateway":fv_config::TUNNEL_SSH_GATEWAY}]}
         }});
     }
-    private_write(
-        &dir.join("applications.compose.json"),
-        &serde_json::to_vec(&overlay)?,
-    )?;
     let jwt = json!({"type":"HS256","key":e["HASURA_JWT_SECRET"],"issuer":"fv-api","audience":"fv-hasura"});
     if let Some(token) = e.get("CLOUDFLARE_TUNNEL_TOKEN") {
         private_write(&dir.join("tunnel/token"), token.as_bytes())?;
@@ -514,6 +519,7 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
     e.insert("BACKUP_S3_ENDPOINT".into(), c.backup.s3_endpoint.clone());
     e.insert("BACKUP_S3_BUCKET".into(), c.backup.bucket.clone());
     e.insert("BACKUP_S3_REGION".into(), c.backup.region.clone());
+    let vault_admin = e.remove("VAULTWARDEN_ADMIN_TOKEN_HASH");
     let mut generated = e.clone();
     generated.insert("HASURA_JWT_CONFIG".into(), jwt.to_string());
     for (key, val) in images {
@@ -530,7 +536,18 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
         ] {
             generated.insert(key.into(), installed.images[kind].tag.clone());
         }
+        if c.vaultwarden_domain.is_some() {
+            let image = installed
+                .images
+                .get("vaultwarden")
+                .ok_or_else(|| anyhow::anyhow!("Vaultwarden requires its signed offline image"))?;
+            super::vaultwarden::render(root, c, &image.tag, vault_admin.as_deref(), &mut overlay)?;
+        }
     }
+    private_write(
+        &dir.join("applications.compose.json"),
+        &serde_json::to_vec(&overlay)?,
+    )?;
     for value in generated.values() {
         fv_config::validate_owned_url(value, &c.cloudflare.zone_name)?;
     }
@@ -557,10 +574,14 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
         "invalid active color"
     );
     let caddy = format!(
-        "{{\n admin 127.0.0.1:2019\n auto_https off\n}}\n:8080 {{\n @api host {}\n handle @api {{\n  reverse_proxy api-{}:8080\n }}\n @admin host {}\n handle @admin {{\n  reverse_proxy admin:8080\n }}\n respond 404\n}}\n",
+        "{{\n admin 127.0.0.1:2019\n auto_https off\n}}\n:8080 {{\n @api host {}\n handle @api {{\n  reverse_proxy api-{}:8080\n }}\n @admin host {}\n handle @admin {{\n  reverse_proxy admin:8080\n }}\n{} respond 404\n}}\n",
         c.api_domain,
         color.trim(),
-        c.admin_domain
+        c.admin_domain,
+        c.vaultwarden_domain
+            .as_deref()
+            .map(super::vaultwarden::proxy_route)
+            .unwrap_or_default()
     );
     private_write(&dir.join("caddy/Caddyfile"), caddy.as_bytes())?;
     private_write(&dir.join("runtime.json"), &serde_json::to_vec_pretty(c)?)?;

@@ -30,7 +30,8 @@ const zone = {
 };
 const zoneGet = "zones get --zone " + id;
 const api = "api.example.com",
-  admin = "admin.example.com";
+  admin = "admin.example.com",
+  vault = "vault.example.com";
 const project = "fv-fixture",
   team = "fixture",
   audience = "synthetic-audience";
@@ -80,6 +81,7 @@ function responses(apply: boolean) {
             access: { required: true, teamName: team, audTag: [audience] },
           },
         },
+        { hostname: vault, service: "http://caddy:8080" },
         { service: "http_status:404" },
       ],
     },
@@ -104,7 +106,7 @@ function responses(apply: boolean) {
     ["tunnels config update " + tunnel]: { role: "account", data: {} },
     ["tunnels token get " + tunnel]: { role: "account", data: "x".repeat(48) },
   };
-  for (const name of [api, admin]) {
+  for (const name of [api, admin, vault]) {
     table[
       `dns records list --zone ${id} --name ${name} --page 1 --per-page 100`
     ] = {
@@ -140,6 +142,7 @@ test("Tunnel apply and verify bind existing routes to the active zone and its ow
     environment: "staging",
     api_domain: api,
     admin_domain: admin,
+    vaultwarden_domain: vault,
     provider: {},
     cloudflare: {
       account_id: account,
@@ -149,7 +152,7 @@ test("Tunnel apply and verify bind existing routes to the active zone and its ow
       access_aud: audience,
       cf_binary: cf,
       cf_sha256: createHash("sha256").update(launcher).digest("hex"),
-      managed_names: [api, admin],
+      managed_names: [api, admin, vault],
     },
   };
   await writeFile(manifest, JSON.stringify(document), { mode: 0o600 });

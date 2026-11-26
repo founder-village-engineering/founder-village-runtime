@@ -35,6 +35,24 @@ node --import tsx scripts/restore-secrets.ts production /protected/recovery-bund
 
 Provide `BACKUP_HMAC_KEY_FILE` from independent custody. Secrets are decrypted and validated before replacing any current catalog. The previous catalog is preserved. For a WireGuard deployment, restore the encrypted server key and peer inventory through the verified artifact procedure before applying the interface. For a Tunnel SSH deployment, recover or rotate the connector credential and verify Access, host keys, and the public-inbound firewall proof before reopening traffic.
 
+## Vaultwarden
+
+For a manifest with `vaultwarden_domain` enabled, the backup timer briefly stops Vaultwarden to archive the SQLite database, signing keys, attachments and sends together. The archive streams through age encryption into `vaultwarden-data.tar.age` and the runtime restarts Vaultwarden. The recovery manifest authenticates the archive and the immutable copy records its SHA-256 and object version. The transfer supports encrypted vault archives up to 4 GiB. The Vaultwarden admin hash can be projected again from independent operator custody.
+
+On an isolated replacement host, verify the recovery manifest using the independent backup verifier. As the recovery operator, decrypt into a new owner-only directory using the escrowed age identity.
+
+```sh
+set -o pipefail
+umask 077
+mkdir -m 0700 "$vault_restore_dir"
+age -d -i "$age_identity_file" "$recovery_bundle/vaultwarden-data.tar.age" |
+  tar -xf - -C "$vault_restore_dir"
+```
+
+Check SQLite integrity and start the matching pinned Vaultwarden image with the new directory on a private network. Verify you can sign in and retrieve an attachment. Keep the prior data directory for rollback. To activate the restored vault, stop the serving Vaultwarden service, install the verified data at `.state/production/vaultwarden/data` with UID and GID `65532` and mode `0700` on the directory, then start the runtime under the production manifest. Verify the public hostname and the denial of `/admin` before reopening vault access. [Vaultwarden recovery files](https://github.com/dani-garcia/vaultwarden/wiki/Backing-up-your-vault)
+
+## Clean-host recovery
+
 For a real disaster:
 
 1. Stop ingress and freeze automated jobs/notifications. Preserve the failed host, current volumes, partial transfers, and independent audit history.

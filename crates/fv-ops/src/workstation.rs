@@ -224,10 +224,19 @@ impl Manifest {
         ] {
             ensure!(hex(checksum, 64), "invalid artifact digest");
         }
-        ensure!(m.images.len() == KINDS.len(), "incomplete signed image set");
-        for kind in KINDS {
-            let entry = m.images.get(kind).context("missing signed image")?;
-            let component = if kind == "app" { "runtime" } else { kind };
+        ensure!(
+            KINDS.iter().all(|kind| m.images.contains_key(*kind))
+                && m.images
+                    .keys()
+                    .all(|kind| KINDS.contains(&kind.as_str()) || kind == "vaultwarden"),
+            "invalid signed image set"
+        );
+        for (kind, entry) in &m.images {
+            let component = if kind == "app" {
+                "runtime"
+            } else {
+                kind.as_str()
+            };
             ensure!(
                 entry.tag == format!("fv-{component}:local-{}", m.revision)
                     && [&entry.id, &entry.manifest_id]
@@ -375,7 +384,7 @@ impl Manifest {
         self.verify_with(root, Path::new("/usr/bin/docker"))
     }
     fn verify_with(&self, root: &Path, docker: &Path) -> Result<()> {
-        for kind in KINDS {
+        for kind in self.images.keys() {
             self.check_image(root, kind, docker)?;
         }
         Ok(())

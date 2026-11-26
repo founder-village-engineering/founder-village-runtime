@@ -25,11 +25,13 @@ import {
   type CfRequest,
 } from "../scripts/production/discovery.ts";
 import {
+  credential,
   exists,
   identities,
   privateText,
   publish,
   run,
+  useVaultwardenBindings,
 } from "../scripts/production/workstation.ts";
 
 test("credential preflight reports absent, unreadable and delegated grants by name", async () => {
@@ -58,6 +60,27 @@ test("credential preflight reports absent, unreadable and delegated grants by na
   assert.equal(complete.credentialProjectionComplete, true);
   assert.deepEqual(complete.delegated, []);
   assert.deepEqual(complete.missing, []);
+});
+
+test("preflight accepts Vaultwarden bindings and rejects conflicting file projections", async () => {
+  const name = "FV_HCLOUD_TOKEN";
+  const value = randomUUID();
+  const directory = await mkdtemp(join(tmpdir(), "fv-vault-bindings-"));
+  const previous = process.env;
+  process.env = { CREDENTIALS_DIRECTORY: directory };
+  useVaultwardenBindings(new Map([[name, value]]));
+  try {
+    assert.equal(await credential(name), value);
+    assert.deepEqual((await credentialPreflight()).mounted, [name]);
+    await publish(join(directory, name), randomUUID() + "\n");
+    const drift = await credentialPreflight();
+    assert.deepEqual(drift.invalid, [name]);
+    assert.ok(!JSON.stringify(drift).includes(value));
+  } finally {
+    useVaultwardenBindings(new Map());
+    process.env = previous;
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("The deployment token grants only SSH and admin retains named MFA", () => {
@@ -336,6 +359,14 @@ test("A machine generates a complete private production profile and reuses trust
           302,
         );
       }
+      if (u.hostname === "vault.foundervillage.org") {
+        assert.equal(init.redirect, "error");
+        assert(["/alive", "/admin"].includes(u.pathname));
+        return new Response(null, {
+          status: u.pathname === "/alive" ? 200 : 404,
+          headers: { "cache-control": "no-store" },
+        });
+      }
       if (
         u.hostname === "api.cloudflare.com" &&
         u.pathname.endsWith("/access/service_tokens")
@@ -518,7 +549,7 @@ test("A machine generates a complete private production profile and reuses trust
   await deploy(await prepareOnce());
   assert.equal(
     (await operations()).slice(before.length),
-    "cf verify\ntunnel ssh\npages verify\n",
+    "cf verify\ntunnel ssh\npublic api\npages verify\n",
   );
   await publish(join(creds, "FV_SSH_HOST_PUBLIC_KEY"), keys.operatorPublic);
   await assert.rejects(prepareOnce, /host key/);

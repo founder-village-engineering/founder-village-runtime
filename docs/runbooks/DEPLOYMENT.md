@@ -8,7 +8,7 @@
 
 ## Build and sign on the workstation
 
-One release targets one Linux architecture. The Helsinki CX23 uses `amd64`. The builder requires a local Docker Engine, the locked checkout, Git, Gitleaks and OpenSSH. It compiles the Rust CLI, native Node runtime and dependencies, and TypeScript services locally. It exports the six pinned runtime images and scans the application image. The signed manifest binds the exact architecture, image identities, application SBOM, checkout, CLI and host files. The install transfers an offline bundle over pinned SSH. [Docker multi-platform builds](https://docs.docker.com/build/building/multi-platform/)
+One release targets one Linux architecture. The Helsinki CX23 uses `amd64`. The builder requires a local Docker Engine, the locked checkout, Git, Gitleaks and OpenSSH. It compiles the Rust CLI, native Node runtime and dependencies, and TypeScript services locally. It exports the runtime images, including the pinned Vaultwarden image, and scans the application image. The signed manifest binds the exact architecture, image identities, application SBOM, checkout, CLI and host files. The install transfers an offline bundle over pinned SSH. [Docker multi-platform builds](https://docs.docker.com/build/building/multi-platform/)
 
 Keep a dedicated release-signing key on the workstation or in its SSH agent. Verify the public key fingerprint through an independent trusted channel. Keep a single trusted public line in a separate operator-controlled file outside both the checkout and the release directory, using this form with the actual Ed25519 public key. [OpenSSH allowed signers](https://man.openbsd.org/ssh-keygen#ALLOWED_SIGNERS)
 

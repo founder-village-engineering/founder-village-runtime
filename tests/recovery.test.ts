@@ -120,6 +120,41 @@ test("recovery verifier authenticates exact artifacts and rejects tampering, ext
     };
     await writeManifest(tunneled);
     await verify();
+    const vaultRuntime = Buffer.from(
+      JSON.stringify({
+        ...JSON.parse(runtime.toString()),
+        vaultwarden_domain: "vault.example.com",
+      }),
+    );
+    const vaultArchive = Buffer.alloc(1024 ** 2 + 1, 1);
+    const artifact = (name: string, bytes: Buffer) => ({
+      name,
+      size: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    });
+    const vault = {
+      ...tunneled,
+      artifacts: tunneled.artifacts.map((entry) =>
+        entry.name === "runtime.json"
+          ? artifact(entry.name, vaultRuntime)
+          : entry,
+      ),
+    };
+    await writeFile(path.join(dir, "runtime.json"), vaultRuntime);
+    await writeManifest(vault);
+    await assert.rejects(verify, /Vaultwarden recovery artifact-set mismatch/);
+    const vaultCopy = artifact("vaultwarden-data.tar.age", vaultArchive);
+    await writeFile(path.join(dir, vaultCopy.name), vaultArchive);
+    await writeManifest({
+      ...vault,
+      artifacts: [...vault.artifacts, vaultCopy],
+    });
+    await verify();
+    vaultArchive[0] = 2;
+    await writeFile(path.join(dir, vaultCopy.name), vaultArchive);
+    await assert.rejects(verify, /recovery artifact altered/);
+    await unlink(path.join(dir, vaultCopy.name));
+    await writeFile(path.join(dir, "runtime.json"), runtime);
     const loneKey = {
       name: "wireguard.key.age",
       size: data.length,

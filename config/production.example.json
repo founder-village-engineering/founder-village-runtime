@@ -3,6 +3,7 @@
   "project": "fv-production",
   "api_domain": "api.foundervillage.org",
   "admin_domain": "admin.foundervillage.org",
+  "vaultwarden_domain": "vault.foundervillage.org",
   "ssh_cidrs": ["127.0.0.1/32"],
   "wireguard_cidr": "10.90.0.0/24",
   "wireguard_port": 51827,
@@ -22,6 +23,7 @@
       "api.foundervillage.org",
       "admin.foundervillage.org",
       "ssh.foundervillage.org",
+      "vault.foundervillage.org",
       "canary.foundervillage.org"
     ],
     "access_team": "",

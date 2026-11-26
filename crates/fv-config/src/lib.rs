@@ -10,6 +10,8 @@ pub struct Config {
     pub project: String,
     pub api_domain: String,
     pub admin_domain: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vaultwarden_domain: Option<String>,
     pub ssh_cidrs: Vec<String>,
     pub wireguard_cidr: String,
     pub wireguard_port: u16,
@@ -306,6 +308,7 @@ impl Config {
         [self.api_domain.as_str(), self.admin_domain.as_str()]
             .into_iter()
             .chain(self.cloudflare.ssh_domain.as_deref())
+            .chain(self.vaultwarden_domain.as_deref())
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -390,6 +393,18 @@ impl Config {
                     && ssh != &self.admin_domain,
                 "tunnel SSH must use a separate one-level public hostname"
             );
+        }
+        if let Some(vault) = &self.vaultwarden_domain {
+            ensure!(
+                self.environment != "local"
+                    && direct_subdomain(vault, zone)
+                    && vault != &self.api_domain
+                    && vault != &self.admin_domain
+                    && self.cloudflare.ssh_domain.as_ref() != Some(vault),
+                "Vaultwarden requires a separate one-level public hostname"
+            );
+        }
+        if self.cloudflare.ssh_domain.is_some() || self.vaultwarden_domain.is_some() {
             ensure!(
                 self.tunnel_domains().all(|name| self
                     .cloudflare

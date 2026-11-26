@@ -1,8 +1,9 @@
 import { readFile, readdir, lstat } from "node:fs/promises";
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
 import { secret } from "../packages/database/index.ts";
+import { recoveryArtifact, vaultwardenArchive } from "./recovery-artifact.ts";
 if (!process.argv[2]) throw new Error("recovery directory required");
 const dir = path.resolve(process.argv[2]);
 const directoryStat = await lstat(dir);
@@ -47,6 +48,7 @@ const body = z
             "backup-receipt.json",
             "wireguard.key.age",
             "wireguard-peers.json.age",
+            vaultwardenArchive,
           ]),
           size: z.number().int().nonnegative(),
           sha256: z.string().regex(/^[a-f0-9]{64}$/),
@@ -77,20 +79,8 @@ if (
 )
   throw new Error("recovery artifact-set mismatch");
 for (const a of body.artifacts) {
-  const f = path.join(dir, a.name),
-    stat = await lstat(f);
-  if (
-    !stat.isFile() ||
-    stat.isSymbolicLink() ||
-    stat.size !== a.size ||
-    stat.size > 1024 * 1024
-  )
-    throw new Error("unsafe recovery artifact");
-  const bytes = await readFile(f);
-  if (
-    bytes.length !== a.size ||
-    createHash("sha256").update(bytes).digest("hex") !== a.sha256
-  )
+  const artifact = await recoveryArtifact(dir, a.name);
+  if (artifact.size !== a.size || artifact.sha256 !== a.sha256)
     throw new Error("recovery artifact altered");
 }
 if (body.environment !== "local") {
@@ -98,6 +88,7 @@ if (body.environment !== "local") {
     .object({
       environment: z.literal(body.environment),
       cloudflare: z.object({ ssh_domain: z.string().min(1).nullish() }),
+      vaultwarden_domain: z.string().min(1).nullish(),
     })
     .parse(JSON.parse(await readFile(path.join(dir, "runtime.json"), "utf8")));
   const wireguard = ["wireguard.key.age", "wireguard-peers.json.age"];
@@ -107,6 +98,10 @@ if (body.environment !== "local") {
     !wireguard.every((name) => actual.includes(name))
   )
     throw new Error("incomplete WireGuard recovery artifact-set");
+  if (
+    Boolean(config.vaultwarden_domain) !== actual.includes(vaultwardenArchive)
+  )
+    throw new Error("Vaultwarden recovery artifact-set mismatch");
 }
 console.log(
   JSON.stringify({

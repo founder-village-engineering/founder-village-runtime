@@ -1,9 +1,13 @@
 import { mkdir, readFile, writeFile, lstat } from "node:fs/promises";
-import { createHmac, createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import { secret } from "../packages/database/index.ts";
+import {
+  recoveryArtifact,
+  recoveryVerifyTimeout,
+} from "./recovery-artifact.ts";
 const exec = promisify(execFile),
   env = secret("FV_ENV");
 if (!["local", "staging", "production"].includes(env))
@@ -22,7 +26,7 @@ try {
     import.meta.url.endsWith(".js")
       ? ["dist/scripts/verify-recovery.js", dir]
       : ["--import", "tsx", "scripts/verify-recovery.ts", dir],
-    { timeout: 30000 },
+    { timeout: recoveryVerifyTimeout },
   );
   console.log("existing recovery bundle verified");
   process.exit(0);
@@ -90,15 +94,7 @@ for (const [index, [source, name]] of wireguard.entries()) {
 const { readdir } = await import("node:fs/promises");
 const artifacts = [];
 for (const name of (await readdir(dir)).sort()) {
-  const stat = await lstat(`${dir}/${name}`);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024)
-    throw new Error("unsafe recovery artifact");
-  const data = await readFile(`${dir}/${name}`);
-  artifacts.push({
-    name,
-    size: data.length,
-    sha256: createHash("sha256").update(data).digest("hex"),
-  });
+  artifacts.push(await recoveryArtifact(dir, name));
 }
 const body = JSON.stringify({
   version: 1,
@@ -118,7 +114,7 @@ await exec(
   import.meta.url.endsWith(".js")
     ? ["dist/scripts/verify-recovery.js", dir]
     : ["--import", "tsx", "scripts/verify-recovery.ts", dir],
-  { timeout: 30000 },
+  { timeout: recoveryVerifyTimeout },
 );
 console.log(
   JSON.stringify({

@@ -208,6 +208,28 @@ async function publicRuntime(p: Production) {
     !dest.pathname.startsWith("/cdn-cgi/access/login/")
   )
     throw new Error("Unexpected admin Access challenge");
+  if (p.manifest.vaultwarden_domain) {
+    const origin = "https://" + p.manifest.vaultwarden_domain;
+    const results = await Promise.all(
+      ["/alive", "/admin"].map(async (route) => {
+        const response = await fetch(origin + route, {
+          redirect: "error",
+          signal: AbortSignal.timeout(10_000),
+        });
+        await response.body?.cancel();
+        return {
+          status: response.status,
+          noStore: response.headers.get("cache-control")?.includes("no-store"),
+        };
+      }),
+    );
+    if (
+      results[0]?.status !== 200 ||
+      results[1]?.status !== 404 ||
+      !results.every((response) => response.noStore)
+    )
+      throw new Error("Vaultwarden ingress or admin isolation check failed");
+  }
 }
 
 export async function deploy(p: Production) {
@@ -334,6 +356,7 @@ export async function deploy(p: Production) {
         await cfStep("verify");
         await probeSsh();
         await hostRun(tunnel, cli + " release verify");
+        await publicRuntime(p);
         await pages("verify");
         console.log(
           "Verified the existing production deployment and public firewall.",

@@ -68,6 +68,7 @@ pub fn run(
         )?;
     }
     if c.environment != "local" {
+        fv_ops::vaultwarden::start(root, c)?;
         fv_ops::deploy::resume(root, c)?;
     }
     Ok(())

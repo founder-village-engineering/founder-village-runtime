@@ -56,12 +56,26 @@ pub fn promote_installed(root: &Path, c: &Config, revision: &str) -> Result<()> 
     super::backup::verify(root, c)?;
     let attempt = (|| -> Result<()> {
         switch_host(root, &cfg, Some(revision), &fs::read(candidate_path)?)?;
+        if candidate.vaultwarden_domain.is_some() {
+            super::render::render(root, &candidate)?;
+        }
+        if c.vaultwarden_domain.is_none() && candidate.vaultwarden_domain.is_some() {
+            super::vaultwarden::start(root, &candidate)?;
+            super::backup::capture(root, &candidate, "full")?;
+        }
         let id = prepare(root, &candidate, revision, &manifest.image)?;
         deploy(root, &candidate, &id)
     })();
     if let Err(e) = attempt {
+        let stop_vault = if c.vaultwarden_domain.is_none() && candidate.vaultwarden_domain.is_some()
+        {
+            super::compose(root, &candidate, &["stop", "vaultwarden"])
+        } else {
+            Ok(())
+        };
         switch_host(root, &cfg, Some(&current), &previous_cfg)?;
         super::render::render(root, c)?;
+        stop_vault?;
         return Err(e);
     }
     if pending.exists() {
@@ -187,6 +201,7 @@ pub fn deploy(root: &Path, c: &Config, id: &str) -> Result<()> {
             previous.trim().to_uppercase()
         )) == Some(&release.revision)
     {
+        super::vaultwarden::start(root, c)?;
         check_proxy(c, &release.revision)?;
         return verify_containers(
             root,
@@ -240,6 +255,7 @@ pub fn deploy(root: &Path, c: &Config, id: &str) -> Result<()> {
             if next == "blue" { 43811 } else { 43812 },
             &release.revision,
         )?;
+        super::vaultwarden::start(root, c)?;
         start(root, c, &["admin", "caddy"])?;
         private_write(&state.join("active-color"), next.as_bytes())?;
         cutover = true;
@@ -354,6 +370,24 @@ fn check_proxy(c: &Config, revision: &str) -> Result<()> {
         .error_for_status()?;
     let served: serde_json::Value = response.json()?;
     ensure!(served["revision"] == revision, "serving revision mismatch");
+    if let Some(vault) = &c.vaultwarden_domain {
+        let response = client
+            .get("http://127.0.0.1:43880/alive")
+            .header("Host", vault)
+            .send()?;
+        ensure!(
+            response.status().is_success(),
+            "vault proxy readiness failed"
+        );
+        let response = client
+            .get("http://127.0.0.1:43880/admin")
+            .header("Host", vault)
+            .send()?;
+        ensure!(
+            response.status() == reqwest::StatusCode::NOT_FOUND,
+            "vault proxy exposed its admin path"
+        );
+    }
     Ok(())
 }
 

@@ -13,6 +13,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
 import { fingerprint } from "../packages/operations/cloudflare.ts";
+import { recoveryVerifyTimeout } from "./recovery-artifact.ts";
 const exec = promisify(execFile),
   environment = z
     .enum(["local", "staging", "production"])
@@ -24,7 +25,7 @@ await exec(
   import.meta.url.endsWith(".js")
     ? ["dist/scripts/verify-recovery.js", bundle]
     : ["--import", "tsx", "scripts/verify-recovery.ts", bundle],
-  { timeout: 30000 },
+  { timeout: recoveryVerifyTimeout },
 );
 const envelope = JSON.parse(
   await readFile(`${bundle}/manifest.json`, "utf8"),

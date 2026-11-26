@@ -83,6 +83,10 @@ fn caddyfile(routes: &BTreeMap<String, u16>) -> String {
     );
     text.push_str(" {\n tls internal\n");
     for (index, (host, port)) in routes.iter().enumerate() {
+        if host == "vault.fv" {
+            text.push_str(&super::vaultwarden::proxy_route(host));
+            continue;
+        }
         text.push_str(&format!(" @service{index} host {host}\n handle @service{index} {{\n  reverse_proxy host.docker.internal:{port}\n }}\n"));
     }
     text.push_str(" respond \"Unknown Founder Village hostname\" 404\n}\n");
@@ -107,7 +111,7 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
         }
     }
     let mount = |name: &str, target: &str| format!("{}:{target}:ro", dir.join(name).display());
-    let compose = json!({
+    let mut compose = json!({
         "services": {
             "local-edge": {
                 "labels": {"fv.local.config-sha256": fv_config::digest(caddy.as_bytes())},
@@ -131,6 +135,14 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
         },
         "volumes": {"local_edge_data": {}, "local_edge_config": {}}
     });
+    let vault = images
+        .get("vaultwarden")
+        .context("Vaultwarden image pin missing")?;
+    if let Some(service) = super::vaultwarden::workstation_service(root, vault)? {
+        compose["services"]["vaultwarden"] = service;
+        compose["services"]["local-edge"]["networks"] = json!(["default", "vaultwarden"]);
+        compose["networks"]["vaultwarden"] = json!({"internal": true});
+    }
     private_write(
         &dir.join("compose.json"),
         &serde_json::to_vec_pretty(&compose)?,
@@ -138,7 +150,7 @@ pub fn render(root: &Path, c: &Config) -> Result<()> {
     Ok(())
 }
 
-fn compose(root: &Path, args: &[&str]) -> Command {
+pub(crate) fn compose(root: &Path, args: &[&str]) -> Command {
     let mut command = Command::new("docker");
     command
         .args(["compose", "--project-directory"])

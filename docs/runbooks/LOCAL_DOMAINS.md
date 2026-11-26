@@ -8,13 +8,14 @@
 
 `.fv` is a workstation-local convention. The runtime does not register it publicly or request public certificates. `config/local-domains.json` is the route registry:
 
-| URL | Loopback upstream |
+| URL | Upstream |
 | --- | --- |
 | `https://api.fv` | `http://127.0.0.1:43801` |
 | `https://api-dev.fv` | `http://127.0.0.1:43801` |
 | `https://admin.fv` | `http://127.0.0.1:43802` |
 | `https://monitor.fv` | `http://127.0.0.1:43804` |
 | `https://workers.fv` | `http://127.0.0.1:43805` |
+| `https://vault.fv` | Vaultwarden on the private Compose network after workstation setup |
 
 `api-dev.fv` is an alias of the current local API and shares its data and credentials. The hostname suffix does not create a separate environment. Hasura stays private on loopback port 43803. Root administrators access its console through the Hasura page inside `https://admin.fv`; both former standalone Hasura names receive `NXDOMAIN` and have no proxy routes or certificates.
 

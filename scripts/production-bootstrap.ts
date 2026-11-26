@@ -33,10 +33,12 @@ import {
   publish,
   run,
   stage,
+  useVaultwardenBindings,
   workstationDirectory,
 } from "./production/workstation.ts";
 import { deploy } from "./production/deploy.ts";
 import { issueGrants } from "./production/authority.ts";
+import { openProductionVault } from "./production/vaultwarden.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 export async function prepare(
@@ -53,6 +55,7 @@ export async function prepare(
     project: string;
     api_domain: string;
     admin_domain: string;
+    vaultwarden_domain?: string;
     ssh_cidrs: string[];
     cloudflare: {
       zone_name: string;
@@ -269,9 +272,15 @@ async function main() {
     throw new BootstrapError(
       "Usage: npm run production:bootstrap -- preflight|init|prepare|apply",
     );
+  const vault = await openProductionVault();
+  const stored = vault && (await vault.read()).values;
+  useVaultwardenBindings(stored ?? new Map());
   if (action === "preflight") {
     const report = await credentialPreflight();
-    process.stdout.write(json(report));
+    process.stdout.write(json({
+      ...report,
+      ...(stored ? { vaultwardenBindings: stored.size } : {}),
+    }));
     process.exitCode = report.credentialProjectionComplete ? 0 : 1;
     return;
   }

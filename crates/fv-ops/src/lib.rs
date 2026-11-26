@@ -3,6 +3,7 @@ pub mod deploy;
 pub mod local_edge;
 pub mod render;
 pub mod runner;
+pub mod vaultwarden;
 pub mod wireguard;
 pub mod workstation;
 use anyhow::{Result, ensure};

@@ -97,6 +97,8 @@ enum Cmd {
         #[arg(long, default_value = "full")]
         kind: String,
     },
+    /// Invite a user over the host-only Vaultwarden admin route.
+    VaultwardenInvite,
     Wireguard {
         #[arg(value_parser=["enroll","revoke","status","apply"])]
         action: String,
@@ -236,7 +238,15 @@ fn execute() -> Result<()> {
                 fv_ops::compose(
                     &root,
                     &c,
-                    &["--profile", "applications", "--profile", "ingress", "stop"],
+                    &[
+                        "--profile",
+                        "applications",
+                        "--profile",
+                        "ingress",
+                        "--profile",
+                        "vaultwarden",
+                        "stop",
+                    ],
                 )?;
             }
         }
@@ -494,6 +504,10 @@ fn execute() -> Result<()> {
             "verify" => fv_ops::backup::verify(&root, &c)?,
             _ => fv_ops::backup::restore_drill(&root, &c)?,
         },
+        Cmd::VaultwardenInvite => {
+            fv_ops::vaultwarden::invite(&root, &c, std::io::stdin().lock())?;
+            println!("Vaultwarden invitation created");
+        }
         Cmd::Wireguard {
             action,
             name,

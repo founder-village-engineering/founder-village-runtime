@@ -5,19 +5,13 @@ import {
   PutObjectCommand,
   HeadObjectCommand,
 } from "@aws-sdk/client-s3";
-import {
-  mkdir,
-  mkdtemp,
-  rm,
-  readFile,
-  readdir,
-  statfs,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, rm, readdir, statfs } from "node:fs/promises";
 import { createReadStream, createWriteStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
 import { createHash, createHmac } from "node:crypto";
 import { secret } from "../packages/database/index.ts";
+import { recoveryArtifact } from "./recovery-artifact.ts";
 const source = new S3Client({
   endpoint: secret("BACKUP_S3_ENDPOINT"),
   region: secret("BACKUP_S3_REGION"),
@@ -127,19 +121,15 @@ try {
     throw new Error("verified recovery bundle required");
   const directory = `.state/${secret("FV_ENV")}/recovery/${recovery}`;
   for (const name of (await readdir(directory)).sort()) {
-    if (!/^[a-zA-Z0-9.-]+$/.test(name))
-      throw new Error("unsafe recovery artifact");
-    const data = await readFile(`${directory}/${name}`);
-    if (data.length > 1024 * 1024)
-      throw new Error("recovery artifact too large");
-    const sha = createHash("sha256").update(data).digest("base64"),
+    const artifact = await recoveryArtifact(directory, name);
+    const sha = Buffer.from(artifact.sha256, "hex").toString("base64"),
       key = `${prefix}/recovery/${name}`;
     const uploaded = await dest.send(
       new PutObjectCommand({
         Bucket: secret("IMMUTABLE_BUCKET"),
         Key: key,
-        Body: data,
-        ContentLength: data.length,
+        Body: createReadStream(`${directory}/${name}`),
+        ContentLength: artifact.size,
         ChecksumSHA256: sha,
         IfNoneMatch: "*",
         ServerSideEncryption: "AES256",
@@ -157,7 +147,7 @@ try {
     );
     if (
       head.ChecksumSHA256 !== sha ||
-      head.ContentLength !== data.length ||
+      head.ContentLength !== artifact.size ||
       head.ObjectLockMode !== "COMPLIANCE"
     )
       throw new Error("recovery offsite verification failed");
@@ -165,7 +155,7 @@ try {
       key,
       version: uploaded.VersionId,
       sha256: sha,
-      size: data.length,
+      size: artifact.size,
     });
   }
   if (!manifest.length) throw new Error("empty backup replication");
